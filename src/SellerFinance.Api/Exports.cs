@@ -54,12 +54,13 @@ public sealed class ExportWorker(IServiceScopeFactory scopes,ILogger<ExportWorke
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while(!stoppingToken.IsCancellationRequested){try{await ProcessAsync(stoppingToken);}catch(Exception ex){logger.LogError(ex,"Export worker iteration failed");}await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken);}
+        while(!stoppingToken.IsCancellationRequested){try{await ProcessOneAsync(stoppingToken);}catch(Exception ex){logger.LogError(ex,"Export worker iteration failed");}await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken);}
     }
-    private async Task ProcessAsync(CancellationToken ct)
+    public async Task ProcessOneAsync(CancellationToken ct)
     {
         await using var scope=scopes.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();
-        await db.ExportJobs.Where(x=>x.ExpiresAt<DateTimeOffset.UtcNow&&x.FileContent!=null).ExecuteUpdateAsync(x=>x.SetProperty(y=>y.FileContent,(byte[]?)null).SetProperty(y=>y.Status,ExportJobStatus.Expired),ct);
+        if(db.Database.IsRelational())await db.ExportJobs.Where(x=>x.ExpiresAt<DateTimeOffset.UtcNow&&x.FileContent!=null).ExecuteUpdateAsync(x=>x.SetProperty(y=>y.FileContent,(byte[]?)null).SetProperty(y=>y.Status,ExportJobStatus.Expired),ct);
+        else{var expired=await db.ExportJobs.Where(x=>x.ExpiresAt<DateTimeOffset.UtcNow&&x.FileContent!=null).ToArrayAsync(ct);foreach(var item in expired){item.FileContent=null;item.Status=ExportJobStatus.Expired;}if(expired.Length>0)await db.SaveChangesAsync(ct);}
         var job=await db.ExportJobs.OrderBy(x=>x.CreatedAt).FirstOrDefaultAsync(x=>x.Status==ExportJobStatus.Queued,ct);if(job is null)return;job.Status=ExportJobStatus.Running;await db.SaveChangesAsync(ct);
         try{var artifact=await scope.ServiceProvider.GetRequiredService<ExportBuilder>().BuildAsync(job,ct);job.FileContent=artifact.Content;job.ContentType=artifact.ContentType;job.FileName=artifact.FileName;job.RowCount=artifact.RowCount;job.Status=ExportJobStatus.Succeeded;job.CompletedAt=DateTimeOffset.UtcNow;}
         catch(Exception ex){logger.LogWarning("Export {ExportId} failed with {ErrorType}",job.Id,ex.GetType().Name);job.Status=ExportJobStatus.Failed;job.ErrorCode="EXPORT_FAILED";job.CompletedAt=DateTimeOffset.UtcNow;}await db.SaveChangesAsync(ct);

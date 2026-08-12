@@ -3,7 +3,7 @@
 ## Автоматические уровни
 
 1. `dotnet test SellerFinance.slnx --configuration Release` запускает unit, security и API E2E тесты.
-2. API E2E поднимает полное ASP.NET Core приложение в окружении `Testing` на отдельной InMemory БД. Сценарий проходит регистрацию, cookie-сессию, настройки организации, расход, cross-tenant отказ и удаление данных.
+2. API E2E поднимает полное ASP.NET Core приложение в окружении `Testing` на отдельной InMemory БД. Основной acceptance-сценарий проходит регистрацию, cookie-сессию, проверку и шифрование Kaspi token на обезличенном JSON:API fixture, sync worker, CSV preview/confirm себестоимости, dashboard с полной Coverage, background export и скачивание по временной ссылке. Дополнительные сценарии проверяют настройки организации, расходы, роли, cross-tenant отказ и удаление данных.
 3. `pnpm build` проверяет TypeScript и production bundle React.
 4. `dotnet ef migrations script --idempotent` проверяет построение полного PostgreSQL migration script.
 5. GitHub Actions выполняет эти проверки при каждом push и pull request.

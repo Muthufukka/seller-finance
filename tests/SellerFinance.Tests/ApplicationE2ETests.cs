@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging.Abstractions;
 using SellerFinance.Api;
 
 namespace SellerFinance.Tests;
@@ -52,6 +54,27 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         var deletion=await client.SendAsync(new(HttpMethod.Delete,$"/api/v1/organizations/{organizationId}"){Content=JsonContent.Create(new{organizationName="E2E Updated",password})});
         Assert.Equal(HttpStatusCode.OK,deletion.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized,(await client.GetAsync("/api/v1/session")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Onboarding_Kaspi_Sync_Cost_Import_Dashboard_And_Export_Works_End_To_End()
+    {
+        using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"pilot-{Guid.NewGuid():N}@example.test";const string token="fixture-kaspi-token";
+        Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Pilot Owner",organizationName="Pilot Flow"})).StatusCode);var session=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");var organizationId=session.GetProperty("organizationId").GetString()!;client.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);
+
+        var connectionResponse=await client.PostAsJsonAsync("/api/v1/kaspi/connections",new{displayName="Fixture Store",token});Assert.Equal(HttpStatusCode.Created,connectionResponse.StatusCode);var connectionId=(await connectionResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var syncResponse=await client.PostAsync($"/api/v1/kaspi/connections/{connectionId}/sync",null);Assert.Equal(HttpStatusCode.Accepted,syncResponse.StatusCode);var syncId=(await syncResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        await new KaspiSyncWorker(factory.Services.GetRequiredService<IServiceScopeFactory>(),NullLogger<KaspiSyncWorker>.Instance).ProcessOneAsync(CancellationToken.None);
+        var sync=await client.GetFromJsonAsync<JsonElement>($"/api/v1/kaspi/sync/{syncId}");Assert.Equal("Succeeded",sync.GetProperty("status").GetString());Assert.Equal(1,sync.GetProperty("importedOrders").GetInt32());
+
+        var products=await client.GetFromJsonAsync<JsonElement>("/api/v1/products");var product=Assert.Single(products.GetProperty("items").EnumerateArray());Assert.Equal("FIXTURE-SKU",product.GetProperty("sku").GetString());
+        using var multipart=new MultipartFormDataContent();using var csv=new ByteArrayContent(Encoding.UTF8.GetBytes("sku;cost;effectiveFrom\nFIXTURE-SKU;6000;2026-08-01"));csv.Headers.ContentType=new("text/csv");multipart.Add(csv,"file","costs.csv");var previewResponse=await client.PostAsync("/api/v1/costs/imports/preview",multipart);Assert.Equal(HttpStatusCode.OK,previewResponse.StatusCode);var preview=await previewResponse.Content.ReadFromJsonAsync<JsonElement>();Assert.Equal(1,preview.GetProperty("expectedChanges").GetInt32());var importId=preview.GetProperty("id").GetGuid();Assert.Equal(HttpStatusCode.OK,(await client.PostAsync($"/api/v1/costs/imports/{importId}/confirm",null)).StatusCode);
+
+        var summary=await client.GetFromJsonAsync<JsonElement>("/api/v1/analytics/summary?dateFrom=2026-08-01&dateTo=2026-08-31");Assert.Equal(14990,summary.GetProperty("revenue").GetDecimal());Assert.Equal(100,summary.GetProperty("coveragePct").GetDecimal());Assert.False(summary.GetProperty("isPreliminary").GetBoolean());
+        var exportResponse=await client.PostAsJsonAsync("/api/v1/exports",new{reportType="Products",format="csv",dateFrom="2026-08-01",dateTo="2026-08-31",completeCostsOnly=true});Assert.Equal(HttpStatusCode.Accepted,exportResponse.StatusCode);var export=await exportResponse.Content.ReadFromJsonAsync<JsonElement>();var exportId=export.GetProperty("id").GetGuid();var downloadToken=export.GetProperty("downloadToken").GetString()!;
+        await new ExportWorker(factory.Services.GetRequiredService<IServiceScopeFactory>(),NullLogger<ExportWorker>.Instance).ProcessOneAsync(CancellationToken.None);var exportStatus=await client.GetFromJsonAsync<JsonElement>($"/api/v1/exports/{exportId}");Assert.Equal("Succeeded",exportStatus.GetProperty("status").GetString());Assert.Equal(1,exportStatus.GetProperty("rowCount").GetInt32());var download=await client.GetAsync($"/api/v1/exports/download/{downloadToken}");Assert.Equal(HttpStatusCode.OK,download.StatusCode);Assert.Contains("FIXTURE-SKU",await download.Content.ReadAsStringAsync());
+
+        await using var scope=factory.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var connection=await db.MarketplaceConnections.SingleAsync(x=>x.Id==connectionId);Assert.DoesNotContain(token,Encoding.UTF8.GetString(connection.TokenCiphertext));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="product.cost.import.applied"));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="export.queued"));
     }
 
     [Fact]
@@ -135,6 +158,15 @@ public sealed class SellerFinanceApplicationFactory : WebApplicationFactory<Prog
         {
             services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();
             services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));
+            services.AddHttpClient<KaspiClient>(client=>{client.BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/");client.Timeout=TimeSpan.FromSeconds(5);}).ConfigurePrimaryHttpMessageHandler(()=>new KaspiFixtureHandler());
         });
+    }
+
+    private sealed class KaspiFixtureHandler:HttpMessageHandler
+    {
+        private const string Orders="""{"data":[{"type":"orders","id":"fixture-order","attributes":{"code":"FIXTURE-001","totalPrice":14990,"status":"COMPLETED","creationDate":1786453200000,"completionDate":1786539600000,"paymentMode":"PREPAID","deliveryCostForSeller":750}}]}""";
+        private const string Entries="""{"data":[{"type":"orderentries","id":"fixture-line","attributes":{"quantity":2,"totalPrice":14990,"basePrice":8000,"deliveryCost":500}}]}""";
+        private const string Product="""{"data":{"type":"masterproducts","id":"fixture-product","attributes":{"code":"FIXTURE-SKU","name":"Fixture Product","category":"Home"}}}""";
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){var path=request.RequestUri!.AbsolutePath;var body=path.EndsWith("/product")?Product:path.EndsWith("/entries")?Entries:Orders;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/vnd.api+json")});}
     }
 }

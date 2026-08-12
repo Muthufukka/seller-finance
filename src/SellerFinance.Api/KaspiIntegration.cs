@@ -98,7 +98,7 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
         }
     }
 
-    private async Task ProcessOneAsync(CancellationToken ct)
+    public async Task ProcessOneAsync(CancellationToken ct)
     {
         await using var scope=scopes.CreateAsyncScope(); var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();
         var now=DateTimeOffset.UtcNow;var job=await(from candidate in db.SyncJobs join organization in db.Organizations on candidate.OrganizationId equals organization.Id join subscription in db.Subscriptions on organization.Id equals subscription.OrganizationId where organization.Status=="Active"&&(subscription.Status==SubscriptionStatus.Active||subscription.Status==SubscriptionStatus.Trialing)&&subscription.PeriodEnd>now&&(candidate.Status==SyncJobStatus.Queued||candidate.Status==SyncJobStatus.RetryScheduled)&&candidate.NextAttemptAt<=now&&!db.OrganizationFeatureFlags.Any(f=>f.OrganizationId==candidate.OrganizationId&&f.Key=="KaspiSync"&&!f.Enabled) orderby candidate.CreatedAt select candidate).FirstOrDefaultAsync(ct);
