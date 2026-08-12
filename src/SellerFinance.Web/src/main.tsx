@@ -1891,6 +1891,7 @@ function ProductTable({ products, onSelect }: { products: Product[]; onSelect?:(
   );
 }
 function Products({ products, session, dateFrom, dateTo, openProductId }: { products: Product[]; session: Session; dateFrom?: string; dateTo?: string; openProductId?:string }) {
+  const {t,locale}=useI18n();const localeCode=locale==="kk"?"kk-KZ":"ru-RU";
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [sort, setSort] = useState("name-asc"),
@@ -1915,7 +1916,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     const [detailResponse, seriesResponse] = await Promise.all([fetch(`/api/v1/products/${p.id}`, { headers }), fetch(`/api/v1/products/${p.id}/timeseries?${query}`, { headers })]);
     if (detailResponse.ok) setDetail(await detailResponse.json());
     if (seriesResponse.ok) setSeries(await seriesResponse.json());
-    else setMessage("Не удалось загрузить динамику товара");
+    else setMessage(t("products.seriesError"));
     setSeriesLoading(false);
   };
   useEffect(()=>{if(!openProductId)return;const product=normalized.find(p=>p.id===openProductId);if(product)open(product);},[openProductId]);
@@ -1924,7 +1925,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     if (!file) return;
     const form = new FormData();
     form.append("file", file);
-    setMessage("Проверяем файл…");
+    setMessage(t("products.checking"));
     const r = await fetch("/api/v1/costs/imports/preview", {
       method: "POST",
       headers,
@@ -1934,7 +1935,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     if (r.ok) {
       setPreview(data);
       setMessage("");
-    } else setMessage(data.title || "Ошибка импорта");
+    } else setMessage(data.title || t("products.importError"));
   };
   const confirm = async () => {
     const r = await fetch(`/api/v1/costs/imports/${preview.id}/confirm`, {
@@ -1943,9 +1944,9 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     });
     if (r.ok) {
       const data = await r.json();
-      setMessage(`Применено строк: ${data.appliedRows}`);
+      setMessage(`${t("products.applied")}: ${data.appliedRows}`);
       setPreview(null);
-    } else setMessage("Не удалось применить импорт");
+    } else setMessage(t("products.applyError"));
   };
   const addCost = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1960,9 +1961,9 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
       }),
     });
     if (r.ok) {
-      setMessage("Себестоимость добавлена");
+      setMessage(t("products.costAdded"));
       open(selected);
-    } else setMessage((await r.json().catch(() => null))?.title || "Ошибка");
+    } else setMessage((await r.json().catch(() => null))?.title || t("products.error"));
   };
   const toggleStatus = async () => {
     if(!selected)return;const current=statusOverrides[selected.id]??selected.productStatus??(selected.status==="archived"?"Archived":"Active");const next=current==="Archived"?"Active":"Archived";const response=await fetch(`/api/v1/products/${selected.id}/status`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({status:next})});
@@ -1972,33 +1973,22 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">КАТАЛОГ</span>
-          <h1>Товары</h1>
-          <p>Продажи, история себестоимости и Coverage по SKU.</p>
+          <span className="eyebrow">{t("products.eyebrow")}</span>
+          <h1>{t("products.title")}</h1>
+          <p>{t("products.lead")}</p>
         </div>
         <label className="primary file-button">
-          Импорт CSV/XLSX
+          {t("products.import")}
           <input type="file" accept=".csv,.xlsx" onChange={upload} />
         </label>
       </div>
       <div className="product-tools">
-        <input placeholder="Поиск по SKU или названию" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input placeholder={t("products.search")} value={search} onChange={(e) => setSearch(e.target.value)} />
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
-          <option value="all">Все товары</option>
-          <option value="profitable">Прибыльные</option>
-          <option value="loss">Убыточные</option>
-          <option value="missing">Без себестоимости</option>
-          <option value="archived">Архивные</option>
+          <option value="all">{t("products.all")}</option><option value="profitable">{t("products.profitable")}</option><option value="loss">{t("products.loss")}</option><option value="missing">{t("products.missing")}</option><option value="archived">{t("products.archived")}</option>
         </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Сортировка товаров">
-          <option value="name-asc">Название: А–Я</option>
-          <option value="sku-asc">SKU: А–Я</option>
-          <option value="units-desc">Продажи: больше</option>
-          <option value="revenue-desc">Выручка: больше</option>
-          <option value="profit-desc">Прибыль: больше</option>
-          <option value="profit-asc">Прибыль: меньше</option>
-          <option value="margin-desc">Маржа: больше</option>
-          <option value="coveragePct-asc">Coverage: меньше</option>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label={t("products.sort")}>
+          <option value="name-asc">{t("products.nameAsc")}</option><option value="sku-asc">{t("products.skuAsc")}</option><option value="units-desc">{t("products.unitsDesc")}</option><option value="revenue-desc">{t("products.revenueDesc")}</option><option value="profit-desc">{t("products.profitDesc")}</option><option value="profit-asc">{t("products.profitAsc")}</option><option value="margin-desc">{t("products.marginDesc")}</option><option value="coveragePct-asc">{t("products.coverageAsc")}</option>
         </select>
       </div>
       {message && <p className="integration-message">{message}</p>}
@@ -2008,13 +1998,9 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
           <table>
             <thead>
               <tr>
-                <th>Товар</th>
-                <th>Продажи</th>
-                <th>Выручка</th>
-                <th>Прибыль</th>
-                <th>Маржа</th>
+                <th>{t("products.product")}</th><th>{t("products.sales")}</th><th>{t("products.revenue")}</th><th>{t("products.expenses")}</th><th>{t("products.profit")}</th><th>{t("products.margin")}</th>
                 <th>Coverage</th>
-                <th>Статус</th>
+                <th>{t("products.status")}</th>
               </tr>
             </thead>
             <tbody>
@@ -2029,11 +2015,11 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
                   </td>
                   <td>{p.units}</td>
                   <td>{money(p.revenue)}</td>
-                  <td title={`Прямые: ${money(p.directExpenses ?? 0)}; распределённые: ${money(p.allocatedOrganizationExpenses ?? 0)}`}>{money((p.directExpenses ?? 0) + (p.allocatedOrganizationExpenses ?? 0))}</td>
+                  <td title={`${t("products.direct")}: ${money(p.directExpenses ?? 0)}; ${t("products.allocated")}: ${money(p.allocatedOrganizationExpenses ?? 0)}`}>{money((p.directExpenses ?? 0) + (p.allocatedOrganizationExpenses ?? 0))}</td>
                   <td>{money(p.profit)}</td>
                   <td>{pct(p.margin)}</td>
                   <td>{pct(p.coveragePct ?? (p.cost === null ? 0 : 100))}</td>
-                  <td><span className={p.productStatus === "Archived" ? "pill archived" : "pill"}>{p.productStatus === "Archived" ? "Архив" : "Активен"}</span></td>
+                  <td><span className={p.productStatus === "Archived" ? "pill archived" : "pill"}>{p.productStatus === "Archived" ? t("products.archive") : t("products.active")}</span></td>
                 </tr>
               ))}
             </tbody>
