@@ -320,13 +320,13 @@ api.MapPost("/products/{id}/costs", async (HttpContext ctx,string id,ProductCost
     if(await db.ProductCostHistory.AnyAsync(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id&&x.EffectiveFrom==effective))return Results.Conflict(new {title="Себестоимость на эту дату уже существует"});
     db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),ProductId=id,CostAmount=request.Cost,EffectiveFrom=effective,Source=CostSource.Manual,CreatedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!});
     AuditWriter.Add(db,ctx,"product.cost.changed","Product",id);
-    await db.SaveChangesAsync();
+    try{await db.SaveChangesAsync();}catch(DbUpdateException ex)when(ex.InnerException is Npgsql.PostgresException{SqlState:Npgsql.PostgresErrorCodes.UniqueViolation}){return Results.Conflict(new{title="Себестоимость на эту дату уже существует"});}
     return Results.Ok(new { productId=id,cost=request.Cost,effectiveFrom=effective });
 });
 api.MapGet("/products/{id}",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>
 {
     var product=await db.Products.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());if(product is null)return Results.NotFound();
-    var history=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync();
+    var history=await(from cost in db.ProductCostHistory.AsNoTracking() join author in db.Users.AsNoTracking() on cost.CreatedByUserId equals author.Id into authors from author in authors.DefaultIfEmpty() where cost.OrganizationId==ctx.Tenant()&&cost.ProductId==id orderby cost.EffectiveFrom descending,cost.CreatedAt descending select new{cost.Id,cost.CostAmount,cost.EffectiveFrom,source=cost.Source.ToString(),author=author!=null?author.DisplayName:"System",cost.CreatedAt}).ToArrayAsync();
     return Results.Ok(new{product.Id,product.Sku,product.Name,product.Category,product.ExternalProductId,product.Status,currentCost=history.FirstOrDefault(x=>x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow))?.CostAmount,costHistory=history});
 });
 api.MapGet("/products/{id}/timeseries",async(HttpContext ctx,string id,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo)=>(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)
@@ -334,7 +334,12 @@ api.MapGet("/products/{id}/timeseries",async(HttpContext ctx,string id,SellerFin
     :!await db.Products.AsNoTracking().AnyAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant())
         ?Results.NotFound()
         :Results.Ok(await DbAnalytics.ProductTimeSeriesAsync(db,ctx.Tenant(),id,dateFrom,dateTo)));
-api.MapGet("/products/{id}/costs",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>Results.Ok(await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync()));
+api.MapGet("/products/{id}/costs",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>
+{
+    if(!await db.Products.AsNoTracking().AnyAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant()))return Results.NotFound();
+    var history=await(from cost in db.ProductCostHistory.AsNoTracking() join author in db.Users.AsNoTracking() on cost.CreatedByUserId equals author.Id into authors from author in authors.DefaultIfEmpty() where cost.OrganizationId==ctx.Tenant()&&cost.ProductId==id orderby cost.EffectiveFrom descending,cost.CreatedAt descending select new{cost.Id,cost.CostAmount,cost.EffectiveFrom,source=cost.Source.ToString(),author=author!=null?author.DisplayName:"System",cost.CreatedAt}).ToArrayAsync();
+    return Results.Ok(history);
+});
 api.MapPut("/products/{id}/status",async(HttpContext ctx,string id,ProductStatusRequest request,SellerFinanceDbContext db)=>
 {
     if(!ctx.Membership().CanWrite())return Results.Forbid();var status=request.Status?.Trim();if(status is not("Active" or "Archived"))return Results.BadRequest(new{title="Status must be Active or Archived"});var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());if(product is null)return Results.NotFound();product.Status=status;AuditWriter.Add(db,ctx,"product.status.changed","Product",id,JsonSerializer.Serialize(new{status}));await db.SaveChangesAsync();return Results.Ok(new{product.Id,product.Status});

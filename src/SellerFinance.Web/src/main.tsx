@@ -2111,7 +2111,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
                 <div key={x.id}>
                   <b>{money(x.costAmount)}</b>
                   <span>
-                    {t("product.from")} {new Date(x.effectiveFrom).toLocaleDateString(localeCode)} · {x.source}
+                    {t("product.from")} {new Date(x.effectiveFrom).toLocaleDateString(localeCode)} · {x.source}{x.author && <> · {x.author}</>}
                   </span>
                 </div>
               ))}
