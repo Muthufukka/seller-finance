@@ -194,14 +194,17 @@ api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db,string? st
     return Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant(),status,dateFrom,dateTo,productId,profitFrom,profitTo,search,page,pageSize,completeCostsOnly));
 });
 api.MapGet("/orders/{id}",async(HttpContext c,string id,SellerFinanceDbContext db)=>{var result=await DbAnalytics.OrderDetailAsync(db,c.Tenant(),id);return result is null?Results.NotFound():Results.Ok(result);});
-api.MapGet("/products",async(HttpContext c,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,string? search,string? filter,bool completeCostsOnly=false,int page=1,int pageSize=50)=>
+api.MapGet("/products",async(HttpContext c,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,string? search,string? filter,string sortBy="name",string sortDirection="asc",bool completeCostsOnly=false,int page=1,int pageSize=50)=>
 {
     if(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)return Results.BadRequest(new{title="dateFrom не может быть позже dateTo"});
     if(page<1||pageSize is <1 or >100)return Results.BadRequest(new{title="page должен быть не меньше 1, pageSize — от 1 до 100"});
+    var sortKey=sortBy.Trim().ToLowerInvariant();var descending=sortDirection.Equals("desc",StringComparison.OrdinalIgnoreCase);if(!sortDirection.Equals("asc",StringComparison.OrdinalIgnoreCase)&&!descending)return Results.BadRequest(new{title="sortDirection must be asc or desc"});if(sortKey is not("name" or "sku" or "units" or "revenue" or "cogs" or "profit" or "margin" or "cost" or "coverage"))return Results.BadRequest(new{title="Unknown product sort field"});
     var rows=await DbAnalytics.ProductsAsync(db,c.Tenant(),dateFrom,dateTo,completeCostsOnly);IEnumerable<object> filtered=rows;
     if(!String.IsNullOrWhiteSpace(search))filtered=filtered.Where(x=>{var json=JsonSerializer.Serialize(x);return json.Contains(search.Trim(),StringComparison.OrdinalIgnoreCase);});
     if(!String.IsNullOrWhiteSpace(filter)){var key=filter.Trim().ToLowerInvariant();filtered=filtered.Where(x=>{using var json=JsonDocument.Parse(JsonSerializer.Serialize(x));var root=json.RootElement;var cost=root.GetProperty("cost");var profit=root.GetProperty("profit");return key switch{"missing"=>cost.ValueKind==JsonValueKind.Null,"profitable"=>profit.ValueKind==JsonValueKind.Number&&profit.GetDecimal()>0,"loss"=>profit.ValueKind==JsonValueKind.Number&&profit.GetDecimal()<0,"archived"=>root.GetProperty("productStatus").GetString()=="Archived",_=>true};});}
-    var materialized=filtered.ToArray();var total=materialized.Length;return Results.Ok(new{items=materialized.Skip((page-1)*pageSize).Take(pageSize),page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize)});
+    string Text(object x,string key){using var json=JsonDocument.Parse(JsonSerializer.Serialize(x));return json.RootElement.GetProperty(key).GetString()??"";}decimal Number(object x,string key){using var json=JsonDocument.Parse(JsonSerializer.Serialize(x));var value=json.RootElement.GetProperty(key);return value.ValueKind==JsonValueKind.Number?value.GetDecimal():Decimal.MinValue;}
+    IOrderedEnumerable<object> ordered=sortKey switch{"name"=>descending?filtered.OrderByDescending(x=>Text(x,"name"),StringComparer.OrdinalIgnoreCase):filtered.OrderBy(x=>Text(x,"name"),StringComparer.OrdinalIgnoreCase),"sku"=>descending?filtered.OrderByDescending(x=>Text(x,"sku"),StringComparer.OrdinalIgnoreCase):filtered.OrderBy(x=>Text(x,"sku"),StringComparer.OrdinalIgnoreCase),_=>descending?filtered.OrderByDescending(x=>Number(x,sortKey=="coverage"?"coveragePct":sortKey)):filtered.OrderBy(x=>Number(x,sortKey=="coverage"?"coveragePct":sortKey))};
+    var materialized=ordered.ThenBy(x=>Text(x,"id"),StringComparer.Ordinal).ToArray();var total=materialized.Length;return Results.Ok(new{items=materialized.Skip((page-1)*pageSize).Take(pageSize),page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize),sortBy=sortKey,sortDirection=descending?"desc":"asc"});
 });
 api.MapGet("/fee-rules",async(HttpContext c,SellerFinanceDbContext db)=>Results.Ok(await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==c.Tenant()).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,scope=x.Scope.ToString(),x.ProductId,x.Category,valueType=x.ValueType.ToString(),x.Value,x.EffectiveFrom,x.EffectiveTo}).ToArrayAsync()));
 api.MapPost("/fee-rules",async(HttpContext c,FeeRuleRequest request,SellerFinanceDbContext db)=>
@@ -303,6 +306,10 @@ api.MapGet("/products/{id}/timeseries",async(HttpContext ctx,string id,SellerFin
         ?Results.NotFound()
         :Results.Ok(await DbAnalytics.ProductTimeSeriesAsync(db,ctx.Tenant(),id,dateFrom,dateTo)));
 api.MapGet("/products/{id}/costs",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>Results.Ok(await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync()));
+api.MapPut("/products/{id}/status",async(HttpContext ctx,string id,ProductStatusRequest request,SellerFinanceDbContext db)=>
+{
+    if(!ctx.Membership().CanWrite())return Results.Forbid();var status=request.Status?.Trim();if(status is not("Active" or "Archived"))return Results.BadRequest(new{title="Status must be Active or Archived"});var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());if(product is null)return Results.NotFound();product.Status=status;AuditWriter.Add(db,ctx,"product.status.changed","Product",id,JsonSerializer.Serialize(new{status}));await db.SaveChangesAsync();return Results.Ok(new{product.Id,product.Status});
+});
 api.MapPost("/costs/imports/preview",async(HttpContext ctx,IFormFile file,CostImportService imports,SellerFinanceDbContext db,CancellationToken ct)=>
 {
     if(!ctx.Membership().CanWrite())return Results.Forbid();
@@ -323,6 +330,7 @@ public partial class Program;
 
 record RegisterRequest(string Email,string Password,string DisplayName,string OrganizationName);
 record LoginRequest(string Email,string Password,bool RememberMe=true);
+record ProductStatusRequest(string? Status);
 record ForgotPasswordRequest(string Email);
 record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);

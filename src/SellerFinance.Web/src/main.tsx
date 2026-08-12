@@ -32,6 +32,7 @@ type Product = {
   coveragePct?: number;
   directExpenses?: number;
   allocatedOrganizationExpenses?: number;
+  productStatus?: "Active" | "Archived";
   status: string;
 };
 type Point = { date: string; revenue: number; profit: number };
@@ -1815,6 +1816,8 @@ function ProductTable({ products }: { products: Product[] }) {
 function Products({ products, session, dateFrom, dateTo }: { products: Product[]; session: Session; dateFrom?: string; dateTo?: string }) {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
+    [sort, setSort] = useState("name-asc"),
+    [statusOverrides, setStatusOverrides] = useState<Record<string,"Active"|"Archived">>({}),
     [selected, setSelected] = useState<Product | null>(null),
     [detail, setDetail] = useState<any>(null),
     [series, setSeries] = useState<ProductPoint[]>([]),
@@ -1822,7 +1825,8 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
     [preview, setPreview] = useState<any>(null),
     [message, setMessage] = useState("");
   const headers = { "X-Organization-Id": session.organizationId };
-  const filtered = products.filter((p) => (p.sku + " " + p.name).toLowerCase().includes(search.toLowerCase()) && (filter === "all" || (filter === "missing" && p.cost === null) || (filter === "profitable" && (p.profit ?? 0) > 0) || (filter === "loss" && (p.profit ?? 0) < 0)));
+  const normalized=products.map(p=>({...p,productStatus:statusOverrides[p.id]??p.productStatus??(p.status==="archived"?"Archived":"Active")}));
+  const filtered = normalized.filter((p) => (p.sku + " " + p.name).toLowerCase().includes(search.toLowerCase()) && (filter === "all" || (filter === "missing" && p.cost === null) || (filter === "profitable" && (p.profit ?? 0) > 0) || (filter === "loss" && (p.profit ?? 0) < 0) || (filter === "archived" && p.productStatus === "Archived"))).sort((a,b)=>{const [key,direction]=sort.split("-");const av=key==="name"?a.name.toLocaleLowerCase("ru"):key==="sku"?a.sku.toLocaleLowerCase("ru"):(a as any)[key]??Number.NEGATIVE_INFINITY;const bv=key==="name"?b.name.toLocaleLowerCase("ru"):key==="sku"?b.sku.toLocaleLowerCase("ru"):(b as any)[key]??Number.NEGATIVE_INFINITY;const result=typeof av==="string"?av.localeCompare(bv,"ru"):av-bv;return direction==="desc"?-result:result;});
   const open = async (p: Product) => {
     setSelected(p);
     setDetail(null);
@@ -1882,6 +1886,10 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
       open(selected);
     } else setMessage((await r.json().catch(() => null))?.title || "Ошибка");
   };
+  const toggleStatus = async () => {
+    if(!selected)return;const current=statusOverrides[selected.id]??selected.productStatus??(selected.status==="archived"?"Archived":"Active");const next=current==="Archived"?"Active":"Archived";const response=await fetch(`/api/v1/products/${selected.id}/status`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({status:next})});
+    if(!response.ok){setMessage((await response.json().catch(()=>null))?.title||"Не удалось изменить статус товара");return;}setStatusOverrides(value=>({...value,[selected.id]:next}));setSelected({...selected,productStatus:next,status:next==="Archived"?"archived":selected.cost===null?"missing-cost":"profitable"});setDetail((value:any)=>value?{...value,status:next}:value);setMessage(next==="Archived"?"Товар перемещён в архив":"Товар возвращён в активные");
+  };
   return (
     <section className="content">
       <div className="title-row">
@@ -1902,6 +1910,17 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
           <option value="profitable">Прибыльные</option>
           <option value="loss">Убыточные</option>
           <option value="missing">Без себестоимости</option>
+          <option value="archived">Архивные</option>
+        </select>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Сортировка товаров">
+          <option value="name-asc">Название: А–Я</option>
+          <option value="sku-asc">SKU: А–Я</option>
+          <option value="units-desc">Продажи: больше</option>
+          <option value="revenue-desc">Выручка: больше</option>
+          <option value="profit-desc">Прибыль: больше</option>
+          <option value="profit-asc">Прибыль: меньше</option>
+          <option value="margin-desc">Маржа: больше</option>
+          <option value="coveragePct-asc">Coverage: меньше</option>
         </select>
       </div>
       {message && <p className="integration-message">{message}</p>}
@@ -1917,6 +1936,7 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
                 <th>Прибыль</th>
                 <th>Маржа</th>
                 <th>Coverage</th>
+                <th>Статус</th>
               </tr>
             </thead>
             <tbody>
@@ -1935,6 +1955,7 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
                   <td>{money(p.profit)}</td>
                   <td>{pct(p.margin)}</td>
                   <td>{pct(p.coveragePct ?? (p.cost === null ? 0 : 100))}</td>
+                  <td><span className={p.productStatus === "Archived" ? "pill archived" : "pill"}>{p.productStatus === "Archived" ? "Архив" : "Активен"}</span></td>
                 </tr>
               ))}
             </tbody>
@@ -1949,6 +1970,7 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
             </button>
             <span className="eyebrow">{selected.sku}</span>
             <h2>{selected.name}</h2>
+            <div className="product-status-row"><span className={(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"pill archived":"pill"}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"Архив":"Активен"}</span>{session.role!=="Viewer"&&<button type="button" className="secondary" onClick={toggleStatus}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"Вернуть в активные":"Архивировать"}</button>}</div>
             <div className="product-chart-head">
               <div>
                 <h3>Динамика товара</h3>
