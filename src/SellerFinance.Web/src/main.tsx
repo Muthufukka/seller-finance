@@ -293,6 +293,7 @@ function periodRange(period: string, customFrom: string, customTo: string) {
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
   const params = new URLSearchParams(location.search);
   const [register, setRegister] = useState(false),
+    [forgot, setForgot] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [success, setSuccess] = useState("");
@@ -311,13 +312,17 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
         }
       : { email: form.get("email"), password: form.get("password") };
     try {
-      const response = await fetch(`/api/v1/auth/${register ? "register" : "login"}`, {
+      const response = await fetch(`/api/v1/auth/${forgot ? "forgot-password" : register ? "register" : "login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.message || data?.title || data?.detail || "Не удалось войти");
+      if (forgot) {
+        setSuccess("Если аккаунт существует, инструкция отправлена на email.");
+        return;
+      }
       if (data?.emailConfirmationRequired) {
         setSuccess("Проверьте почту и подтвердите email.");
         return;
@@ -342,8 +347,8 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             Seller<b>Finance</b>
           </div>
         </div>
-        <h1>{register ? "Создать аккаунт" : "Войти"}</h1>
-        <p>{register ? "Создайте защищённое рабочее пространство продавца." : "Управляйте прибылью и себестоимостью в одном месте."}</p>
+        <h1>{forgot ? "Восстановить пароль" : register ? "Создать аккаунт" : "Войти"}</h1>
+        <p>{forgot ? "Отправим одноразовую ссылку, если аккаунт существует." : register ? "Создайте защищённое рабочее пространство продавца." : "Управляйте прибылью и себестоимостью в одном месте."}</p>
         {success ? (
           <div className="auth-success">{success}</div>
         ) : (
@@ -364,26 +369,27 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
               Email
               <input name="email" type="email" required autoComplete="email" />
             </label>
-            <label>
+            {!forgot && <label>
               Пароль
               <input name="password" type="password" minLength={10} required autoComplete={register ? "new-password" : "current-password"} />
-            </label>
+            </label>}
             {error && <div className="auth-error">{error}</div>}
             <button className="primary" disabled={busy}>
               <LogIn />
-              {busy ? "Подождите…" : register ? "Зарегистрироваться" : "Войти"}
+              {busy ? "Подождите…" : forgot ? "Отправить инструкцию" : register ? "Зарегистрироваться" : "Войти"}
             </button>
           </form>
         )}
+        {!register && !forgot && <button className="auth-switch" onClick={() => { setForgot(true); setError(""); setSuccess(""); }}>Забыли пароль?</button>}
         <button
           className="auth-switch"
           onClick={() => {
-            setRegister(!register);
+            if (forgot) setForgot(false); else setRegister(!register);
             setError("");
             setSuccess("");
           }}
         >
-          {register ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться"}
+          {forgot ? "Вернуться ко входу" : register ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться"}
         </button>
       </section>
       <aside className="auth-hero">

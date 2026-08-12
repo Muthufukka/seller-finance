@@ -44,8 +44,8 @@ builder.Services.AddSingleton<NotificationDispatcher>();
 if(!useTestDatabase){builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
 builder.Services.AddRateLimiter(options=>
 {
-    options.AddFixedWindowLimiter("auth",o=>{o.PermitLimit=10;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
-    options.AddFixedWindowLimiter("sensitive",o=>{o.PermitLimit=useTestDatabase?100:6;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
+    options.AddPolicy("auth",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new(){PermitLimit=useTestDatabase?1000:10,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
+    options.AddPolicy("sensitive",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new(){PermitLimit=useTestDatabase?1000:6,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
     options.RejectionStatusCode=429;
 });
 builder.Services.AddOpenApi();
@@ -68,7 +68,7 @@ app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="health
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
     ? Results.Ok(new { status="healthy", provider=db.Database.ProviderName })
     : Results.Problem("Database connection failed", statusCode:503));
-app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])?Results.Ok(new{status="ready",database="healthy",encryption="configured"}):Results.Problem("Service is not ready",statusCode:503));
+app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config,EmailDelivery email)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])&&(!config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")||email.IsConfigured)?Results.Ok(new{status="ready",database="healthy",encryption="configured",email=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")?"configured":"optional"}):Results.Problem("Service is not ready",statusCode:503));
 app.MapOpenApi();
 app.MapGet("/api-docs",()=>Results.Content("""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Seller Finance API</title></head><body><main><h1>Seller Finance API v1</h1><p>Актуальный машиночитаемый контракт: <a href="/openapi/v1.json">OpenAPI JSON</a>.</p><p>Business API использует защищённую HttpOnly cookie-сессию. Организация определяется только по membership авторизованного пользователя.</p><h2>Основные группы</h2><ul><li>Auth и session: /api/v1/auth, /api/v1/session</li><li>Организации и роли: /api/v1/organizations</li><li>Kaspi: /api/v1/kaspi</li><li>Товары и себестоимость: /api/v1/products, /api/v1/costs</li><li>Заказы и финансы: /api/v1/orders, /api/v1/expenses, /api/v1/fee-rules</li><li>Аналитика и экспорт: /api/v1/analytics, /api/v1/exports</li></ul><p><a href="/">Вернуться в Seller Finance</a></p></main></body></html>
@@ -95,7 +95,11 @@ auth.MapPost("/register", async (HttpContext context,RegisterRequest request, Us
     if(confirmationRequired){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";if(!await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted))return Results.Problem("Не удалось отправить письмо подтверждения",statusCode:503);return Results.Ok(new{emailConfirmationRequired=true});}
     await signIn.SignInAsync(user, isPersistent:true);return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
 }).RequireRateLimiting("auth");
-auth.MapGet("/confirm-email",async(string userId,string token,UserManager<AppUser> users)=>{var user=await users.FindByIdAsync(userId);if(user is null)return Results.BadRequest("Недействительная ссылка");var result=await users.ConfirmEmailAsync(user,token);return result.Succeeded?Results.Content("Email подтверждён. Вернитесь в Seller Finance.","text/plain; charset=utf-8"):Results.BadRequest("Ссылка недействительна или истекла");}).RequireRateLimiting("auth");
+auth.MapGet("/confirm-email",async(string userId,string token,UserManager<AppUser> users,SellerFinanceDbContext db)=>{var user=await users.FindByIdAsync(userId);if(user is null)return Results.BadRequest("Недействительная ссылка");var result=await users.ConfirmEmailAsync(user,token);if(!result.Succeeded)return Results.BadRequest("Ссылка недействительна или истекла");var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.email.confirmed",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();return Results.Content("Email подтверждён. Вернитесь в Seller Finance.","text/plain; charset=utf-8");}).RequireRateLimiting("auth");
+auth.MapPost("/resend-confirmation",async(HttpContext context,ForgotPasswordRequest request,UserManager<AppUser> users,EmailDelivery email)=>
+{
+    var user=await users.FindByEmailAsync(request.Email.Trim());if(user is not null&&!user.EmailConfirmed&&email.IsConfigured){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted);}return Results.Ok(new{message="Если аккаунт ожидает подтверждения, письмо будет отправлено."});
+}).RequireRateLimiting("auth");
 auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
@@ -107,19 +111,19 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
     return Results.Ok(new { status="authenticated" });
 }).RequireRateLimiting("auth");
 auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
-auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email) =>
+auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email,SellerFinanceDbContext db) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
-    if (user is not null&&email.IsConfigured){var token=await users.GeneratePasswordResetTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/?resetEmail={Uri.EscapeDataString(user.Email!)}&resetToken={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Сброс пароля Seller Finance",EmailDelivery.ResetHtml(url),context.RequestAborted);}
+    if (user is not null&&email.IsConfigured){var token=await users.GeneratePasswordResetTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/?resetEmail={Uri.EscapeDataString(user.Email!)}&resetToken={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Сброс пароля Seller Finance",EmailDelivery.ResetHtml(url),context.RequestAborted);var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.password.reset.requested",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();}
     return Results.Ok(new { message="Если аккаунт существует, инструкция будет отправлена на email." });
 }).RequireRateLimiting("auth");
-auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users) =>
+auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users,SellerFinanceDbContext db) =>
 {
     var user=await users.FindByEmailAsync(request.Email.Trim());
-    if (user is null) return Results.BadRequest(new { title="Недействительный запрос" });
+    if (user is null) return Results.BadRequest(new { title="Недействительная или истёкшая ссылка" });
     var result=await users.ResetPasswordAsync(user,request.Token,request.NewPassword);
-    return result.Succeeded ? Results.NoContent() : Results.ValidationProblem(result.Errors.GroupBy(x=>x.Code).ToDictionary(x=>x.Key,x=>x.Select(y=>y.Description).ToArray()));
-});
+    if(!result.Succeeded)return Results.BadRequest(new{title="Недействительная или истёкшая ссылка либо пароль не соответствует требованиям"});var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.password.reset.completed",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();return Results.NoContent();
+}).RequireRateLimiting("auth");
 
 var api = app.MapGroup("/api/v1").RequireAuthorization();
 api.AddEndpointFilter(async (invocation, next) =>

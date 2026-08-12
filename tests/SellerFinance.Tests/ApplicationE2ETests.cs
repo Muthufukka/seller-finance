@@ -66,6 +66,25 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Email_Confirmation_And_Password_Reset_Are_Audited_And_Do_Not_Enumerate_Accounts()
+    {
+        using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"auth-{Guid.NewGuid():N}@example.test";const string oldPassword="PilotTest123";const string newPassword="ChangedPilot123";
+        Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password=oldPassword,displayName="Auth User",organizationName="Auth E2E"})).StatusCode);var session=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");var organizationId=session.GetProperty("organizationId").GetString()!;string userId;string confirmationToken;string resetToken;
+        await using(var scope=factory.Services.CreateAsyncScope()){var users=scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();var user=(await users.FindByEmailAsync(email))!;user.EmailConfirmed=false;Assert.True((await users.UpdateAsync(user)).Succeeded);userId=user.Id;confirmationToken=await users.GenerateEmailConfirmationTokenAsync(user);resetToken=await users.GeneratePasswordResetTokenAsync(user);}
+        var confirmationUrl=$"/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(userId)}&token={Uri.EscapeDataString(confirmationToken)}";Assert.Equal(HttpStatusCode.OK,(await client.GetAsync(confirmationUrl)).StatusCode);
+        var knownForgot=await client.PostAsJsonAsync("/api/v1/auth/forgot-password",new{email});var unknownForgot=await client.PostAsJsonAsync("/api/v1/auth/forgot-password",new{email=$"missing-{Guid.NewGuid():N}@example.test"});Assert.Equal(HttpStatusCode.OK,knownForgot.StatusCode);Assert.Equal(await knownForgot.Content.ReadAsStringAsync(),await unknownForgot.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NoContent,(await client.PostAsJsonAsync("/api/v1/auth/reset-password",new{email,token=resetToken,newPassword})).StatusCode);Assert.Equal(HttpStatusCode.BadRequest,(await client.PostAsJsonAsync("/api/v1/auth/reset-password",new{email,token=resetToken,newPassword="AnotherPilot123"})).StatusCode);
+        await client.PostAsync("/api/v1/auth/logout",null);Assert.Equal(HttpStatusCode.Unauthorized,(await client.PostAsJsonAsync("/api/v1/auth/login",new{email,password=oldPassword,rememberMe=false})).StatusCode);Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/login",new{email,password=newPassword,rememberMe=false})).StatusCode);
+        await using(var scope=factory.Services.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.email.confirmed"&&x.UserId==userId));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.password.reset.completed"&&x.UserId==userId));}
+    }
+
+    [Fact]
+    public async Task Required_Email_Without_Smtp_Fails_Readiness_And_Registration()
+    {
+        await using var isolated=new MissingSmtpApplicationFactory();using var client=isolated.CreateClient(new(){AllowAutoRedirect=false});Assert.Equal(HttpStatusCode.ServiceUnavailable,(await client.GetAsync("/health/ready")).StatusCode);var registration=await client.PostAsJsonAsync("/api/v1/auth/register",new{email=$"smtp-{Guid.NewGuid():N}@example.test",password="PilotTest123",displayName="SMTP",organizationName="SMTP Org"});Assert.Equal(HttpStatusCode.ServiceUnavailable,registration.StatusCode);
+    }
+
+    [Fact]
     public async Task Owner_Manages_Members_Invitations_And_Role_Boundaries()
     {
         using var ownerClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var ownerEmail=$"owner-{Guid.NewGuid():N}@example.test";const string password="PilotTest123";
@@ -83,6 +102,14 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         var invitedEmail=$"invite-{Guid.NewGuid():N}@example.test";var invitation=await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=invitedEmail,role="Analyst"});Assert.Equal(HttpStatusCode.OK,invitation.StatusCode);Assert.Equal(HttpStatusCode.Conflict,(await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=invitedEmail,role="Viewer"})).StatusCode);var pending=await ownerClient.GetFromJsonAsync<JsonElement[]>($"/api/v1/organizations/{organizationId}/invitations");Assert.NotNull(pending);Assert.Single(pending);var invitationId=pending[0].GetProperty("id").GetGuid();Assert.Equal(HttpStatusCode.NoContent,(await ownerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/invitations/{invitationId}")).StatusCode);
         var acceptingEmail=$"accept-{Guid.NewGuid():N}@example.test";var acceptingInvitation=await (await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=acceptingEmail,role="Analyst"})).Content.ReadFromJsonAsync<JsonElement>();var invitationToken=acceptingInvitation.GetProperty("invitationToken").GetString()!;using var acceptingClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});Assert.Equal(HttpStatusCode.OK,(await acceptingClient.PostAsJsonAsync("/api/v1/auth/register",new{email=acceptingEmail,password,displayName="Accepting",organizationName="Temporary Org"})).StatusCode);var acceptingSession=await acceptingClient.GetFromJsonAsync<JsonElement>("/api/v1/session");acceptingClient.DefaultRequestHeaders.Add("X-Organization-Id",acceptingSession.GetProperty("organizationId").GetString()!);var accepted=await acceptingClient.PostAsJsonAsync("/api/v1/invitations/accept",new{token=invitationToken});Assert.Equal(HttpStatusCode.OK,accepted.StatusCode);acceptingClient.DefaultRequestHeaders.Remove("X-Organization-Id");acceptingClient.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);var targetSession=await acceptingClient.GetFromJsonAsync<JsonElement>("/api/v1/session");Assert.Equal("Analyst",targetSession.GetProperty("role").GetString());
         Assert.Equal(HttpStatusCode.NoContent,(await ownerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/members/{memberId}")).StatusCode);
+    }
+}
+
+public sealed class MissingSmtpApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        var databaseName=$"seller-finance-no-smtp-{Guid.NewGuid():N}";builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","true");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"EMAIL_CONFIRMATION_REQUIRED","true"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
     }
 }
 
