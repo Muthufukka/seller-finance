@@ -15,7 +15,7 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
         {
             "orders"=>await AllOrdersAsync(job),
             "abc"=>await DbAnalytics.AbcAsync(db,job.OrganizationId,"profit",job.DateFrom,job.DateTo,job.CompleteCostsOnly),
-            "missingcosts"=>(await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo,job.CompleteCostsOnly)).Where(IsMissingCost).ToArray(),
+            "missingcosts"=>(await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo)).Where(IsMissingCost).ToArray(),
             _=>await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo,job.CompleteCostsOnly)
         };
         var rows=JsonSerializer.SerializeToElement(source).EnumerateArray().ToArray();var columns=Columns(job.ReportType);
@@ -27,7 +27,7 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
         var rows=new List<object>();for(var page=1;;page++){var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,job.OrganizationId,from:job.DateFrom,to:job.DateTo,page:page,pageSize:100,completeCostsOnly:job.CompleteCostsOnly));rows.AddRange(result.GetProperty("items").EnumerateArray().Select(x=>(object)x.Clone()));if(page>=result.GetProperty("totalPages").GetInt32())break;}return rows.ToArray();
     }
 
-    private static bool IsMissingCost(object value){var json=JsonSerializer.SerializeToElement(value);return json.TryGetProperty("cost",out var cost)&&cost.ValueKind==JsonValueKind.Null;}
+    private static bool IsMissingCost(object value){var json=JsonSerializer.SerializeToElement(value);var currentMissing=json.TryGetProperty("cost",out var cost)&&cost.ValueKind==JsonValueKind.Null;var historicalGap=json.TryGetProperty("revenue",out var revenue)&&revenue.TryGetDecimal(out var amount)&&amount>0&&json.TryGetProperty("coveragePct",out var coverage)&&coverage.TryGetDecimal(out var percentage)&&percentage<100m;return currentMissing||historicalGap;}
     private static (string Key,string Header)[] Columns(string report)=>report.ToLowerInvariant() switch
     {
         "orders"=>[("externalId","Order code"),("storeName","Store"),("date","Date"),("status","Status"),("amount","Amount"),("cogs","COGS"),("fees","Fees"),("delivery","Delivery"),("otherExpenses","Other expenses"),("totalExpenses","Total expenses"),("profit","Profit"),("coveragePct","Coverage %"),("complete","Complete")],
@@ -38,14 +38,19 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
 
     private static ExportArtifact BuildCsv(ExportJobEntity job,JsonElement[] rows,(string Key,string Header)[] columns)
     {
-        var text=new StringBuilder();text.Append('\uFEFF').AppendLine(String.Join(';',columns.Select(x=>Escape(x.Header))));foreach(var row in rows)text.AppendLine(String.Join(';',columns.Select(x=>Escape(Value(row,x.Key)))));return new(Encoding.UTF8.GetBytes(text.ToString()),"text/csv; charset=utf-8",FileName(job,"csv"),rows.Length);
+        var text=new StringBuilder();text.Append('\uFEFF').AppendLine(String.Join(';',columns.Select(x=>Escape(x.Header))));foreach(var row in rows)text.AppendLine(String.Join(';',columns.Select(x=>Escape(CsvValue(row,x.Key)))));return new(Encoding.UTF8.GetBytes(text.ToString()),"text/csv; charset=utf-8",FileName(job,"csv"),rows.Length);
     }
     private static ExportArtifact BuildXlsx(ExportJobEntity job,JsonElement[] rows,(string Key,string Header)[] columns)
     {
         using var workbook=new XLWorkbook();var sheet=workbook.AddWorksheet("Report");for(var c=0;c<columns.Length;c++)sheet.Cell(1,c+1).Value=columns[c].Header;for(var r=0;r<rows.Length;r++)for(var c=0;c<columns.Length;c++)SetCell(sheet.Cell(r+2,c+1),rows[r],columns[c].Key);sheet.Range(1,1,1,columns.Length).Style.Font.Bold=true;sheet.Range(1,1,1,columns.Length).Style.Fill.BackgroundColor=XLColor.FromHtml("#DDE9DF");sheet.SheetView.FreezeRows(1);sheet.Columns().AdjustToContents(8,42);using var stream=new MemoryStream();workbook.SaveAs(stream);return new(stream.ToArray(),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",FileName(job,"xlsx"),rows.Length);
     }
     private static void SetCell(IXLCell cell,JsonElement row,string key){if(!row.TryGetProperty(key,out var value)||value.ValueKind==JsonValueKind.Null)return;if(value.ValueKind==JsonValueKind.Number&&value.TryGetDecimal(out var number)){cell.Value=number;cell.Style.NumberFormat.Format="#,##0.00";}else if(value.ValueKind is JsonValueKind.True or JsonValueKind.False)cell.Value=value.GetBoolean();else cell.Value=value.ToString();}
-    private static string Value(JsonElement row,string key)=>row.TryGetProperty(key,out var value)&&value.ValueKind!=JsonValueKind.Null?value.ToString():"";
+    private static string CsvValue(JsonElement row,string key)
+    {
+        if(!row.TryGetProperty(key,out var value)||value.ValueKind==JsonValueKind.Null)return "";
+        var text=value.ToString();
+        return value.ValueKind==JsonValueKind.String&&text.Length>0&&text[0] is '=' or '+' or '-' or '@' or '\t' or '\r'?"'"+text:text;
+    }
     private static string Escape(string value)=>$"\"{value.Replace("\"","\"\"")}\"";
     private static string FileName(ExportJobEntity job,string extension)=>$"seller-finance-{job.ReportType.ToLowerInvariant()}-{DateTime.UtcNow:yyyyMMddHHmm}.{extension}";
 }

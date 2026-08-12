@@ -35,6 +35,21 @@ public sealed class SaasFeaturesTests
     }
 
     [Fact]
+    public async Task Missing_Cost_Export_Includes_Partial_Historical_Coverage()
+    {
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="PARTIAL",Name="Partial"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=400,EffectiveFrom=new(2026,8,10),CreatedByUserId="test"});db.Orders.AddRange(new(){Id="before",ExternalId="before",OrganizationId="org",Date=new(2026,8,5),CompletionDate=new(2026,8,5),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="before",ProductId="p1",Revenue=1000,Quantity=1}]},new(){Id="after",ExternalId="after",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="after",ProductId="p1",Revenue=1000,Quantity=1}]});await db.SaveChangesAsync();
+        var artifact=await new ExportBuilder(db).BuildAsync(Job("csv","MissingCosts"),CancellationToken.None);var text=Encoding.UTF8.GetString(artifact.Content);Assert.Equal(1,artifact.RowCount);Assert.Contains("PARTIAL",text);Assert.Contains("50",text);
+    }
+
+    [Fact]
+    public async Task Spreadsheet_Exports_Do_Not_Treat_Text_As_Formulas()
+    {
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="=2+2",Name="@SUM(1,1)"});await db.SaveChangesAsync();
+        var csv=Encoding.UTF8.GetString((await new ExportBuilder(db).BuildAsync(Job("csv","Products"),CancellationToken.None)).Content);Assert.Contains("\"'=2+2\"",csv);Assert.Contains("\"'@SUM(1,1)\"",csv);Assert.DoesNotContain("\"=2+2\"",csv);
+        var xlsx=await new ExportBuilder(db).BuildAsync(Job("xlsx","Products"),CancellationToken.None);using var stream=new MemoryStream(xlsx.Content);using var workbook=new XLWorkbook(stream);var sheet=workbook.Worksheet(1);Assert.False(sheet.Cell("A2").HasFormula);Assert.False(sheet.Cell("B2").HasFormula);Assert.Equal("=2+2",sheet.Cell("A2").GetString());Assert.Equal("@SUM(1,1)",sheet.Cell("B2").GetString());
+    }
+
+    [Fact]
     public async Task ExportBuilder_Creates_Valid_Xlsx()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=400,EffectiveFrom=new(2026,1,1),CreatedByUserId="test"});db.Orders.Add(new(){Id="order",ExternalId="order",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="order",ProductId="p1",Revenue=1000,Quantity=1,FeeRate=.1m,Delivery=100,OtherVariableCosts=50}]});db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",Type=ExpenseType.Advertising,Amount=25,Date=new(2026,8,12),CreatedByUserId="test"});await db.SaveChangesAsync();var artifact=await new ExportBuilder(db).BuildAsync(Job("xlsx","Products"),CancellationToken.None);
