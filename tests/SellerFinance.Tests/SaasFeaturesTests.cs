@@ -19,6 +19,13 @@ public sealed class SaasFeaturesTests
     [InlineData(SubscriptionPlan.Business,30)]
     public void Member_Limits_Match_Tariff(SubscriptionPlan plan,int expected)=>Assert.Equal(expected,PlanLimits.MaxMembers(plan));
 
+    [Theory]
+    [InlineData(SubscriptionPlan.Trial,1,90)]
+    [InlineData(SubscriptionPlan.Start,1,365)]
+    [InlineData(SubscriptionPlan.Pro,3,null)]
+    [InlineData(SubscriptionPlan.Business,10,null)]
+    public void Store_And_History_Limits_Match_Tariff(SubscriptionPlan plan,int stores,int? days){var now=new DateTimeOffset(2026,8,12,0,0,0,TimeSpan.Zero);Assert.Equal(stores,PlanLimits.MaxStores(plan));Assert.Equal(days.HasValue?now.AddDays(-days.Value):DateTimeOffset.UnixEpoch,PlanLimits.InitialHistoryFrom(plan,now));}
+
     [Fact]
     public async Task ExportBuilder_Creates_Utf8_Csv_Without_Missing_Cost_As_Zero()
     {
@@ -90,7 +97,7 @@ public sealed class SaasFeaturesTests
     [Fact]
     public async Task Saas_Admin_Retry_Creates_New_Safe_Job_Only_For_Attention_State()
     {
-        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow.AddDays(-1)});await db.SaveChangesAsync();
+        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status=SubscriptionStatus.Active,PeriodEnd=DateTimeOffset.UtcNow.AddMonths(1)});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow.AddDays(-1)});await db.SaveChangesAsync();
         var result=await SaasAdminOperations.RetrySyncAsync(db,source);
         Assert.Equal(SyncRetryFailure.None,result.Failure);Assert.NotNull(result.Job);Assert.NotEqual(source,result.Job!.Id);Assert.Equal(SyncJobStatus.Queued,result.Job.Status);Assert.Equal(connection,result.Job.MarketplaceConnectionId);
     }
@@ -98,7 +105,7 @@ public sealed class SaasFeaturesTests
     [Fact]
     public async Task Saas_Admin_Retry_Is_Blocked_By_Disabled_Feature()
     {
-        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.OrganizationFeatureFlags.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Key="KaspiSync",Enabled=false,UpdatedByUserId="admin"});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow});await db.SaveChangesAsync();
+        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status=SubscriptionStatus.Active,PeriodEnd=DateTimeOffset.UtcNow.AddMonths(1)});db.OrganizationFeatureFlags.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Key="KaspiSync",Enabled=false,UpdatedByUserId="admin"});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow});await db.SaveChangesAsync();
         Assert.Equal(SyncRetryFailure.OrganizationDisabled,(await SaasAdminOperations.RetrySyncAsync(db,source)).Failure);
     }
 

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SellerFinance.Api;
@@ -11,9 +12,11 @@ using SellerFinance.Api;
 namespace SellerFinance.Api.Migrations
 {
     [DbContext(typeof(SellerFinanceDbContext))]
-    partial class SellerFinanceDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260812140338_SubscriptionsAndMultiStore")]
+    partial class SubscriptionsAndMultiStore
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1071,8 +1074,6 @@ namespace SellerFinance.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("MarketplaceConnectionId");
-
                     b.HasIndex("Status", "NextAttemptAt");
 
                     b.ToTable("SyncJobs");
@@ -1170,57 +1171,12 @@ namespace SellerFinance.Api.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("SellerFinance.Api.MarketplaceConnectionEntity", b =>
-                {
-                    b.HasOne("SellerFinance.Api.OrganizationEntity", null)
-                        .WithMany()
-                        .HasForeignKey("OrganizationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("SellerFinance.Api.OrderEntity", b =>
-                {
-                    b.HasOne("SellerFinance.Api.MarketplaceConnectionEntity", null)
-                        .WithMany()
-                        .HasForeignKey("MarketplaceConnectionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("SellerFinance.Api.OrderLineEntity", b =>
                 {
                     b.HasOne("SellerFinance.Api.OrderEntity", null)
                         .WithMany("Lines")
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("SellerFinance.Api.OrganizationFeatureFlagEntity", b =>
-                {
-                    b.HasOne("SellerFinance.Api.OrganizationEntity", null)
-                        .WithMany()
-                        .HasForeignKey("OrganizationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("SellerFinance.Api.SubscriptionEntity", b =>
-                {
-                    b.HasOne("SellerFinance.Api.OrganizationEntity", null)
-                        .WithOne()
-                        .HasForeignKey("SellerFinance.Api.SubscriptionEntity", "OrganizationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("SellerFinance.Api.SyncJobEntity", b =>
-                {
-                    b.HasOne("SellerFinance.Api.MarketplaceConnectionEntity", null)
-                        .WithMany()
-                        .HasForeignKey("MarketplaceConnectionId")
-                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

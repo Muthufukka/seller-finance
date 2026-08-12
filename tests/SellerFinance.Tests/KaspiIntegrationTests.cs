@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
 using SellerFinance.Api;
 
 namespace SellerFinance.Tests;
@@ -39,6 +40,14 @@ public sealed class KaspiIntegrationTests
         var http=new HttpClient(new RouteHandler(json,entries,product)){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")};
         var result=await new KaspiClient(http).GetOrdersAsync("token",DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,CancellationToken.None);
         Assert.True(result.Success);Assert.Single(result.Orders);Assert.Equal("123",result.Orders[0].Code);Assert.Equal("SKU-1",Assert.Single(result.Orders[0].Lines).ProductCode);
+    }
+
+    [Fact]
+    public async Task Importer_Upserts_Per_Connection_And_Allows_Same_External_Order_In_Two_Stores()
+    {
+        await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var first=Guid.NewGuid();var second=Guid.NewGuid();var source=new KaspiOrderDto("external-1","100",1000,"COMPLETED",DateTimeOffset.UtcNow,[new("entry-1","SKU","Product",null,1,1000,0)]);
+        await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",second,[source]);await db.SaveChangesAsync();
+        Assert.Equal(2,await db.Orders.CountAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==first).ToArrayAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==second).ToArrayAsync());
     }
 
     private sealed class StubHandler(HttpStatusCode status,string content):HttpMessageHandler

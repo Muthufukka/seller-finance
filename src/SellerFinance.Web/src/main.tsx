@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BarChart3, Box, ChevronDown, CircleAlert, Download, LayoutDashboard, LogIn, Menu, PackageSearch, RefreshCw, Search, Settings, ShoppingBag, Sparkles, TrendingDown, TrendingUp, WalletCards, X } from 'lucide-react'
 import './styles.css'
 import {AdminConsole} from './AdminConsole'
+import {KaspiConnections} from './KaspiConnections'
 
 type Summary = { revenue:number; orders:number; units:number; cogs:number|null; grossProfit:number; marketplaceFees:number; delivery:number; operatingProfit:number; operatingMarginPct:number|null; coveragePct:number; isPreliminary:boolean }
 type Product = { id:string; sku:string; name:string; units:number; revenue:number; cogs:number|null; profit:number|null; margin:number|null; cost:number|null; coveragePct?:number; status:string }
@@ -48,7 +49,7 @@ function App(){
       {page==='products'&&<Products products={products} session={session}/>}
       {page==='orders'&&<OrdersPage initialOrders={orders} session={session} products={products}/>}
       {page==='abc'&&<Abc session={session}/>}
-      {page==='integrations'&&<Integrations session={session}/>}
+      {page==='integrations'&&<KaspiConnections session={session}/>}
       {page==='expenses'&&<Expenses session={session} products={products}/>}
       {page==='fees'&&<Fees session={session} products={products}/>}
       {page==='exports'&&<Exports session={session}/>}

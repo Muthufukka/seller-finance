@@ -15,7 +15,7 @@ public static class TenantSecurity
         var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (String.IsNullOrWhiteSpace(userId)) return null;
         var requested = context.Request.Headers["X-Organization-Id"].ToString();
-        var query = from memberRow in db.OrganizationUsers.AsNoTracking() join organization in db.Organizations.AsNoTracking() on memberRow.OrganizationId equals organization.Id where memberRow.UserId==userId&&memberRow.JoinedAt!=null&&organization.Status=="Active" select memberRow;
+        var now=DateTimeOffset.UtcNow;var query = from memberRow in db.OrganizationUsers.AsNoTracking() join organization in db.Organizations.AsNoTracking() on memberRow.OrganizationId equals organization.Id join subscription in db.Subscriptions.AsNoTracking() on organization.Id equals subscription.OrganizationId where memberRow.UserId==userId&&memberRow.JoinedAt!=null&&organization.Status=="Active"&&(subscription.Status==SubscriptionStatus.Active||subscription.Status==SubscriptionStatus.Trialing)&&subscription.PeriodEnd>now select memberRow;
         var membership = String.IsNullOrWhiteSpace(requested)
             ? await query.OrderBy(x => x.JoinedAt).FirstOrDefaultAsync()
             : await query.SingleOrDefaultAsync(x => x.OrganizationId == requested);
@@ -60,4 +60,11 @@ public static class FeatureFlags
 public static class PlanLimits
 {
     public static int MaxMembers(SubscriptionPlan plan)=>plan switch{SubscriptionPlan.Trial=>2,SubscriptionPlan.Start=>3,SubscriptionPlan.Pro=>10,SubscriptionPlan.Business=>30,_=>2};
+    public static int MaxStores(SubscriptionPlan plan)=>plan switch{SubscriptionPlan.Trial or SubscriptionPlan.Start=>1,SubscriptionPlan.Pro=>3,SubscriptionPlan.Business=>10,_=>1};
+    public static DateTimeOffset InitialHistoryFrom(SubscriptionPlan plan,DateTimeOffset now)=>plan switch{SubscriptionPlan.Trial=>now.AddDays(-90),SubscriptionPlan.Start=>now.AddDays(-365),_=>DateTimeOffset.UnixEpoch};
+}
+
+public static class Subscriptions
+{
+    public static Task<SubscriptionEntity> GetAsync(SellerFinanceDbContext db,string organizationId,CancellationToken ct=default)=>db.Subscriptions.SingleAsync(x=>x.OrganizationId==organizationId,ct);
 }

@@ -29,6 +29,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<NotificationRuleEntity> NotificationRules => Set<NotificationRuleEntity>();
     public DbSet<NotificationDeliveryEntity> NotificationDeliveries => Set<NotificationDeliveryEntity>();
     public DbSet<OrganizationFeatureFlagEntity> OrganizationFeatureFlags => Set<OrganizationFeatureFlagEntity>();
+    public DbSet<SubscriptionEntity> Subscriptions => Set<SubscriptionEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -37,7 +38,9 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<ProductEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ProductEntity>().HasIndex(x => new { x.OrganizationId, x.Sku }).IsUnique();
         modelBuilder.Entity<OrderEntity>().HasKey(x => x.Id);
-        modelBuilder.Entity<OrderEntity>().HasIndex(x => new { x.OrganizationId, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<OrderEntity>().HasIndex(x => new { x.MarketplaceConnectionId, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<OrderEntity>().HasIndex(x=>new{x.OrganizationId,x.Date});
+        modelBuilder.Entity<OrderEntity>().HasOne<MarketplaceConnectionEntity>().WithMany().HasForeignKey(x=>x.MarketplaceConnectionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<OrderLineEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderLineEntity>().HasIndex(x => new { x.OrderId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Revenue).HasPrecision(19, 4);
@@ -54,9 +57,11 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<AuditLogEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<AuditLogEntity>().HasIndex(x => new { x.OrganizationId, x.CreatedAt });
         modelBuilder.Entity<MarketplaceConnectionEntity>().HasKey(x => x.Id);
-        modelBuilder.Entity<MarketplaceConnectionEntity>().HasIndex(x => new { x.OrganizationId, x.Provider }).IsUnique();
+        modelBuilder.Entity<MarketplaceConnectionEntity>().HasIndex(x => new { x.OrganizationId, x.Provider, x.DisplayName }).IsUnique();
+        modelBuilder.Entity<MarketplaceConnectionEntity>().HasOne<OrganizationEntity>().WithMany().HasForeignKey(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<SyncJobEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<SyncJobEntity>().HasIndex(x => new { x.Status, x.NextAttemptAt });
+        modelBuilder.Entity<SyncJobEntity>().HasOne<MarketplaceConnectionEntity>().WithMany().HasForeignKey(x=>x.MarketplaceConnectionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<ProductCostHistoryEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ProductCostHistoryEntity>().Property(x => x.CostAmount).HasPrecision(19,4);
         modelBuilder.Entity<ProductCostHistoryEntity>().HasIndex(x => new { x.OrganizationId, x.ProductId, x.EffectiveFrom }).IsUnique();
@@ -88,11 +93,16 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<NotificationDeliveryEntity>().HasIndex(x=>new{x.Status,x.NextAttemptAt});
         modelBuilder.Entity<OrganizationFeatureFlagEntity>().HasKey(x=>x.Id);
         modelBuilder.Entity<OrganizationFeatureFlagEntity>().HasIndex(x=>new{x.OrganizationId,x.Key}).IsUnique();
+        modelBuilder.Entity<OrganizationFeatureFlagEntity>().HasOne<OrganizationEntity>().WithMany().HasForeignKey(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<SubscriptionEntity>().HasKey(x=>x.Id);
+        modelBuilder.Entity<SubscriptionEntity>().HasIndex(x=>x.OrganizationId).IsUnique();
+        modelBuilder.Entity<SubscriptionEntity>().HasOne<OrganizationEntity>().WithOne().HasForeignKey<SubscriptionEntity>(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 
 public enum ExportJobStatus { Queued, Running, Succeeded, Failed, Expired }
 public enum SubscriptionPlan { Trial, Start, Pro, Business }
+public enum SubscriptionStatus { Trialing, Active, Suspended, Expired }
 public enum NotificationEventType { MissingCost, NegativeMargin, SyncRequiresAttention }
 public enum NotificationDeliveryStatus { Queued, Sending, Sent, RetryScheduled, Failed, Suppressed }
 
@@ -163,6 +173,19 @@ public sealed class OrganizationFeatureFlagEntity
     public bool Enabled { get; set; } = true;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public string UpdatedByUserId { get; set; } = "";
+}
+
+public sealed class SubscriptionEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public SubscriptionPlan Plan { get; set; } = SubscriptionPlan.Trial;
+    public string BillingPeriod { get; set; } = "Monthly";
+    public SubscriptionStatus Status { get; set; } = SubscriptionStatus.Trialing;
+    public DateTimeOffset PeriodStart { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset PeriodEnd { get; set; } = DateTimeOffset.UtcNow.AddDays(14);
+    public DateTimeOffset? TrialEndsAt { get; set; } = DateTimeOffset.UtcNow.AddDays(14);
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public enum FeeRuleScope { Default, Category, Product }
@@ -267,6 +290,7 @@ public sealed class MarketplaceConnectionEntity
     public Guid Id { get; set; }
     public string OrganizationId { get; set; } = "";
     public string Provider { get; set; } = "Kaspi";
+    public string DisplayName { get; set; } = "Kaspi Магазин";
     public byte[] TokenCiphertext { get; set; } = [];
     public byte[] TokenNonce { get; set; } = [];
     public byte[] TokenTag { get; set; } = [];
@@ -343,10 +367,8 @@ public sealed class OrganizationEntity
     public string Name { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Almaty";
     public string Currency { get; set; } = "KZT";
-    public SubscriptionPlan Plan { get; set; } = SubscriptionPlan.Trial;
     public string Status { get; set; } = "Active";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
-    public DateTimeOffset TrialEndsAt { get; set; } = DateTimeOffset.UtcNow.AddDays(14);
 }
 
 public sealed class ProductEntity
@@ -363,6 +385,7 @@ public sealed class OrderEntity
 {
     public string Id { get; set; } = "";
     public string OrganizationId { get; set; } = "";
+    public Guid MarketplaceConnectionId { get; set; }
     public string ExternalId { get; set; } = "";
     public OrderStatus Status { get; set; }
     public DateOnly Date { get; set; }
@@ -422,12 +445,15 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Sel
 public static class DatabaseSeed
 {
     private const string DemoTenantId = "demo-organization";
+    private static readonly Guid DemoConnectionId=Guid.Parse("11111111-1111-1111-1111-111111111111");
     public static async Task InitializeAsync(SellerFinanceDbContext db)
     {
         await db.Database.MigrateAsync();
         if (await db.Organizations.AnyAsync()){await EnsureNotificationRulesAsync(db);return;}
 
         db.Organizations.Add(new() { Id = DemoTenantId, Name = "Aspan Market" });
+        db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId});
+        db.MarketplaceConnections.Add(new(){Id=DemoConnectionId,OrganizationId=DemoTenantId,DisplayName="Demo data",Status=MarketplaceConnectionStatus.Disabled});
         db.Products.AddRange(
             new ProductEntity { Id="p1", OrganizationId=DemoTenantId, Sku="HOME-101", Name="Органайзер для кухни", CurrentCost=7200m },
             new ProductEntity { Id="p2", OrganizationId=DemoTenantId, Sku="BEAUTY-220", Name="Набор косметичек", CurrentCost=8900m },
@@ -452,7 +478,7 @@ public static class DatabaseSeed
     private static OrderEntity ToEntity(string id, DateOnly date, string productId, decimal revenue, int quantity,
         decimal? cost, decimal? actualFee, decimal feeRate, decimal delivery) => new()
         {
-            Id=id, ExternalId=id, OrganizationId=DemoTenantId, Status=OrderStatus.Completed, Date=date, CompletionDate=date,
+            Id=id, ExternalId=id, OrganizationId=DemoTenantId, MarketplaceConnectionId=DemoConnectionId,Status=OrderStatus.Completed, Date=date, CompletionDate=date,
             Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, UnitCost=cost, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
         };
 }
@@ -480,18 +506,19 @@ public static class DbAnalytics
     {
         page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);
         var entities=await db.Orders.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        var rows=(await FactsAsync(db,tenant,from,to)).Select(x=>{var f=FinanceCalculator.Calculate([x]);var entity=entities[x.Id];return new OrderListRow(x.Id,entity.ExternalId,x.Date,x.Status.ToString().ToUpperInvariant(),x.Lines.Sum(y=>y.Revenue),x.Lines.Sum(y=>y.Quantity),f.OperatingProfit,f.MarketplaceFees,f.Delivery,x.Lines.All(y=>y.UnitCost.HasValue),entity.CalculationDateFallback,x.Lines.Select(y=>y.ProductId).ToArray());});
+        var stores=await db.MarketplaceConnections.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id,x=>x.DisplayName);
+        var rows=(await FactsAsync(db,tenant,from,to)).Select(x=>{var f=FinanceCalculator.Calculate([x]);var entity=entities[x.Id];return new OrderListRow(x.Id,entity.ExternalId,entity.MarketplaceConnectionId,stores.GetValueOrDefault(entity.MarketplaceConnectionId,"Kaspi"),x.Date,x.Status.ToString().ToUpperInvariant(),x.Lines.Sum(y=>y.Revenue),x.Lines.Sum(y=>y.Quantity),f.OperatingProfit,f.MarketplaceFees,f.Delivery,x.Lines.All(y=>y.UnitCost.HasValue),entity.CalculationDateFallback,x.Lines.Select(y=>y.ProductId).ToArray());});
         if(!String.IsNullOrWhiteSpace(status))rows=rows.Where(x=>String.Equals(x.Status,status.Trim(),StringComparison.OrdinalIgnoreCase));
         if(!String.IsNullOrWhiteSpace(productId))rows=rows.Where(x=>x.ProductIds.Contains(productId));
         if(profitFrom.HasValue)rows=rows.Where(x=>x.Profit.HasValue&&x.Profit>=profitFrom);
         if(profitTo.HasValue)rows=rows.Where(x=>x.Profit.HasValue&&x.Profit<=profitTo);
         if(!String.IsNullOrWhiteSpace(search))rows=rows.Where(x=>x.ExternalId.Contains(search.Trim(),StringComparison.OrdinalIgnoreCase));
         var filtered=rows.OrderByDescending(x=>x.Date).ThenByDescending(x=>x.ExternalId).ToArray();var total=filtered.Length;
-        var items=filtered.Skip((page-1)*pageSize).Take(pageSize).Select(x=>new{id=x.Id,externalId=x.ExternalId,date=x.Date,status=x.Status,amount=x.Amount,items=x.Items,profit=x.Profit,fees=x.Fees,delivery=x.Delivery,complete=x.Complete,calculationDateFallback=x.CalculationDateFallback}).ToArray();
+        var items=filtered.Skip((page-1)*pageSize).Take(pageSize).Select(x=>new{id=x.Id,externalId=x.ExternalId,connectionId=x.ConnectionId,storeName=x.StoreName,date=x.Date,status=x.Status,amount=x.Amount,items=x.Items,profit=x.Profit,fees=x.Fees,delivery=x.Delivery,complete=x.Complete,calculationDateFallback=x.CalculationDateFallback}).ToArray();
         return new{items,page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize)};
     }
 
-    private sealed record OrderListRow(string Id,string ExternalId,DateOnly Date,string Status,decimal Amount,int Items,decimal? Profit,decimal Fees,decimal Delivery,bool Complete,bool CalculationDateFallback,string[] ProductIds);
+    private sealed record OrderListRow(string Id,string ExternalId,Guid ConnectionId,string StoreName,DateOnly Date,string Status,decimal Amount,int Items,decimal? Profit,decimal Fees,decimal Delivery,bool Complete,bool CalculationDateFallback,string[] ProductIds);
 
     public static async Task<object[]> ProductsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null)
     {
@@ -525,7 +552,7 @@ public static class DbAnalytics
     {
         var entity=await db.Orders.AsNoTracking().Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==tenant);if(entity is null)return null;
         var fact=(await FactsAsync(db,tenant)).Single(x=>x.Id==id);var result=FinanceCalculator.Calculate([fact]);var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        return new{entity.Id,entity.ExternalId,date=fact.Date,status=entity.Status.ToString(),entity.CalculationDateFallback,result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,result.VariableCosts,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,lines=fact.Lines.Select((x,i)=>{products.TryGetValue(x.ProductId,out var p);var fee=x.ActualFee??Decimal.Round(x.Revenue*x.FeeRate,4);var cogs=x.UnitCost*x.Quantity;return new{id=entity.Lines[i].Id,x.ProductId,sku=p?.Sku,name=p?.Name,x.Quantity,x.Revenue,x.UnitCost,cogs,fee,x.Delivery,x.OtherVariableCosts,profit=cogs.HasValue?x.Revenue-cogs.Value-fee-x.Delivery-x.OtherVariableCosts:(decimal?)null};})};
+        var storeName=await db.MarketplaceConnections.AsNoTracking().Where(x=>x.Id==entity.MarketplaceConnectionId&&x.OrganizationId==tenant).Select(x=>x.DisplayName).SingleOrDefaultAsync();return new{entity.Id,entity.ExternalId,connectionId=entity.MarketplaceConnectionId,storeName=storeName??"Kaspi",date=fact.Date,status=entity.Status.ToString(),entity.CalculationDateFallback,result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,result.VariableCosts,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,lines=fact.Lines.Select((x,i)=>{products.TryGetValue(x.ProductId,out var p);var fee=x.ActualFee??Decimal.Round(x.Revenue*x.FeeRate,4);var cogs=x.UnitCost*x.Quantity;return new{id=entity.Lines[i].Id,x.ProductId,sku=p?.Sku,name=p?.Name,x.Quantity,x.Revenue,x.UnitCost,cogs,fee,x.Delivery,x.OtherVariableCosts,profit=cogs.HasValue?x.Revenue-cogs.Value-fee-x.Delivery-x.OtherVariableCosts:(decimal?)null};})};
     }
 
     private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null)

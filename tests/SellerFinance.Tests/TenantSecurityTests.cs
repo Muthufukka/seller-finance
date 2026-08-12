@@ -12,7 +12,7 @@ public sealed class TenantSecurityTests
     public async Task ResolveAsync_Rejects_CrossTenant_Selector()
     {
         await using var db = CreateDb();
-        db.Organizations.AddRange(Organization("org-a"),Organization("org-b"));
+        AddOrganization(db,"org-a");AddOrganization(db,"org-b");
         db.OrganizationUsers.Add(Member("user-a", "org-a"));
         await db.SaveChangesAsync();
         var context = Context("user-a", "org-b");
@@ -26,7 +26,7 @@ public sealed class TenantSecurityTests
     public async Task ResolveAsync_Returns_Only_Authenticated_Membership()
     {
         await using var db = CreateDb();
-        db.Organizations.AddRange(Organization("org-a"),Organization("org-b"));
+        AddOrganization(db,"org-a");AddOrganization(db,"org-b");
         db.OrganizationUsers.AddRange(Member("user-a", "org-a", OrganizationRole.Analyst), Member("user-b", "org-b"));
         await db.SaveChangesAsync();
 
@@ -40,8 +40,14 @@ public sealed class TenantSecurityTests
     [Fact]
     public async Task ResolveAsync_Rejects_Suspended_Organization()
     {
-        await using var db=CreateDb();db.Organizations.Add(new(){Id="org",Name="org",Status="Suspended"});db.OrganizationUsers.Add(Member("user","org"));await db.SaveChangesAsync();
+        await using var db=CreateDb();AddOrganization(db,"org","Suspended");db.OrganizationUsers.Add(Member("user","org"));await db.SaveChangesAsync();
         Assert.Null(await TenantSecurity.ResolveAsync(Context("user","org"),db));
+    }
+
+    [Fact]
+    public async Task ResolveAsync_Rejects_Expired_Subscription()
+    {
+        await using var db=CreateDb();db.Organizations.Add(new(){Id="org",Name="org",Status="Active"});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status=SubscriptionStatus.Expired,PeriodEnd=DateTimeOffset.UtcNow.AddMinutes(-1)});db.OrganizationUsers.Add(Member("user","org"));await db.SaveChangesAsync();Assert.Null(await TenantSecurity.ResolveAsync(Context("user","org"),db));
     }
 
     [Fact]
@@ -63,7 +69,7 @@ public sealed class TenantSecurityTests
     {
         UserId = userId, OrganizationId = organizationId, Role = role, JoinedAt = DateTimeOffset.UtcNow
     };
-    private static OrganizationEntity Organization(string id)=>new(){Id=id,Name=id,Status="Active"};
+    private static void AddOrganization(SellerFinanceDbContext db,string id,string status="Active"){db.Organizations.Add(new(){Id=id,Name=id,Status=status});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId=id,Status=SubscriptionStatus.Trialing,PeriodEnd=DateTimeOffset.UtcNow.AddDays(14)});}
 
     private static DefaultHttpContext Context(string userId, string organizationId,string? email=null)
     {

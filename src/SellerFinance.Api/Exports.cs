@@ -30,7 +30,7 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
     private static bool IsMissingCost(object value){var json=JsonSerializer.SerializeToElement(value);return json.TryGetProperty("cost",out var cost)&&cost.ValueKind==JsonValueKind.Null;}
     private static (string Key,string Header)[] Columns(string report)=>report.ToLowerInvariant() switch
     {
-        "orders"=>[("externalId","Order code"),("date","Date"),("status","Status"),("amount","Amount"),("fees","Fees"),("delivery","Delivery"),("profit","Profit"),("complete","Complete")],
+        "orders"=>[("externalId","Order code"),("storeName","Store"),("date","Date"),("status","Status"),("amount","Amount"),("fees","Fees"),("delivery","Delivery"),("profit","Profit"),("complete","Complete")],
         "abc"=>[("sku","SKU"),("name","Name"),("group","ABC"),("value","Value"),("revenue","Revenue"),("profit","Profit"),("units","Units"),("cumulativePct","Cumulative %")],
         "missingcosts"=>[("sku","SKU"),("name","Name"),("units","Units"),("revenue","Revenue"),("coveragePct","Coverage %")],
         _=>[("sku","SKU"),("name","Name"),("units","Units"),("revenue","Revenue"),("cogs","COGS"),("profit","Profit"),("margin","Margin %"),("cost","Current cost"),("coveragePct","Coverage %")]

@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react'
 
 type Props={session:{organizationId:string}}
-type Organization={id:string;name:string;plan:string;status:string;createdAt:string;trialEndsAt:string;memberCount:number;lastActivity?:string;lastSync?:string;lastSyncStatus?:string}
+type Organization={id:string;name:string;plan:string;subscriptionStatus:string;billingPeriod:string;status:string;createdAt:string;trialEndsAt:string;memberCount:number;storeCount:number;lastActivity?:string;lastSync?:string;lastSyncStatus?:string}
 type SyncJob={id:string;organizationId:string;status:string;attempt:number;importedOrders:number;errorCode?:string;createdAt:string;completedAt?:string}
 type Flag={key:string;enabled:boolean}
 
