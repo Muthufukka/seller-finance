@@ -26,6 +26,14 @@ public sealed class SaasFeaturesTests
     }
 
     [Fact]
+    public async Task ExportBuilder_Exports_Paginated_Order_Source()
+    {
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.Orders.Add(new(){Id="order-1",ExternalId="KSP-1",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="order-1",ProductId="p1",Revenue=1500m,Quantity=1,UnitCost=500m}]});await db.SaveChangesAsync();
+        var artifact=await new ExportBuilder(db).BuildAsync(Job("csv","Orders"),CancellationToken.None);var text=Encoding.UTF8.GetString(artifact.Content);
+        Assert.Contains("KSP-1",text);Assert.Equal(1,artifact.RowCount);
+    }
+
+    [Fact]
     public async Task Telegram_Start_Code_Links_Only_Matching_Pending_Organization()
     {
         await using var db=CreateDb();const string code="link-code";db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",LinkCodeHash=TokenTools.Hash(code),LinkCodeExpiresAt=DateTimeOffset.UtcNow.AddMinutes(5)});await db.SaveChangesAsync();var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var client=new TelegramClient(new HttpClient(new OkHandler()),config);using var update=JsonDocument.Parse("""{"message":{"text":"/start link-code","chat":{"id":12345}}}""");

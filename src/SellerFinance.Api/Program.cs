@@ -167,8 +167,22 @@ api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db
 api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant(),dateFrom,dateTo)));
 api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant(),dateFrom,dateTo)));
 api.MapGet("/analytics/abc",async(HttpContext c,SellerFinanceDbContext db,string? metric,DateOnly? dateFrom,DateOnly? dateTo)=>Results.Ok(await DbAnalytics.AbcAsync(db,c.Tenant(),metric??"profit",dateFrom,dateTo)));
-api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant())));
+api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db,string? status,DateOnly? dateFrom,DateOnly? dateTo,string? productId,decimal? profitFrom,decimal? profitTo,string? search,int page=1,int pageSize=50) =>
+{
+    if(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)return Results.BadRequest(new{title="dateFrom не может быть позже dateTo"});
+    if(page<1||pageSize is <1 or >100)return Results.BadRequest(new{title="page должен быть не меньше 1, pageSize — от 1 до 100"});
+    return Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant(),status,dateFrom,dateTo,productId,profitFrom,profitTo,search,page,pageSize));
+});
 api.MapGet("/orders/{id}",async(HttpContext c,string id,SellerFinanceDbContext db)=>{var result=await DbAnalytics.OrderDetailAsync(db,c.Tenant(),id);return result is null?Results.NotFound():Results.Ok(result);});
+api.MapGet("/products",async(HttpContext c,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,string? search,string? filter,int page=1,int pageSize=50)=>
+{
+    if(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)return Results.BadRequest(new{title="dateFrom не может быть позже dateTo"});
+    if(page<1||pageSize is <1 or >100)return Results.BadRequest(new{title="page должен быть не меньше 1, pageSize — от 1 до 100"});
+    var rows=await DbAnalytics.ProductsAsync(db,c.Tenant(),dateFrom,dateTo);IEnumerable<object> filtered=rows;
+    if(!String.IsNullOrWhiteSpace(search))filtered=filtered.Where(x=>{var json=JsonSerializer.Serialize(x);return json.Contains(search.Trim(),StringComparison.OrdinalIgnoreCase);});
+    if(!String.IsNullOrWhiteSpace(filter)){var key=filter.Trim().ToLowerInvariant();filtered=filtered.Where(x=>{using var json=JsonDocument.Parse(JsonSerializer.Serialize(x));var root=json.RootElement;var cost=root.GetProperty("cost");var profit=root.GetProperty("profit");return key switch{"missing"=>cost.ValueKind==JsonValueKind.Null,"profitable"=>profit.ValueKind==JsonValueKind.Number&&profit.GetDecimal()>0,"loss"=>profit.ValueKind==JsonValueKind.Number&&profit.GetDecimal()<0,_=>true};});}
+    var materialized=filtered.ToArray();var total=materialized.Length;return Results.Ok(new{items=materialized.Skip((page-1)*pageSize).Take(pageSize),page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize)});
+});
 api.MapGet("/fee-rules",async(HttpContext c,SellerFinanceDbContext db)=>Results.Ok(await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==c.Tenant()).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,scope=x.Scope.ToString(),x.ProductId,x.Category,valueType=x.ValueType.ToString(),x.Value,x.EffectiveFrom,x.EffectiveTo}).ToArrayAsync()));
 api.MapPost("/fee-rules",async(HttpContext c,FeeRuleRequest request,SellerFinanceDbContext db)=>
 {

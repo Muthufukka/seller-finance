@@ -13,13 +13,18 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
     {
         object[] source=job.ReportType.ToLowerInvariant() switch
         {
-            "orders"=>await DbAnalytics.OrdersAsync(db,job.OrganizationId),
+            "orders"=>await AllOrdersAsync(job),
             "abc"=>await DbAnalytics.AbcAsync(db,job.OrganizationId,"profit",job.DateFrom,job.DateTo),
             "missingcosts"=>(await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo)).Where(IsMissingCost).ToArray(),
             _=>await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo)
         };
         var rows=JsonSerializer.SerializeToElement(source).EnumerateArray().ToArray();var columns=Columns(job.ReportType);
         return job.Format.Equals("csv",StringComparison.OrdinalIgnoreCase)?BuildCsv(job,rows,columns):BuildXlsx(job,rows,columns);
+    }
+
+    private async Task<object[]> AllOrdersAsync(ExportJobEntity job)
+    {
+        var rows=new List<object>();for(var page=1;;page++){var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,job.OrganizationId,from:job.DateFrom,to:job.DateTo,page:page,pageSize:100));rows.AddRange(result.GetProperty("items").EnumerateArray().Select(x=>(object)x.Clone()));if(page>=result.GetProperty("totalPages").GetInt32())break;}return rows.ToArray();
     }
 
     private static bool IsMissingCost(object value){var json=JsonSerializer.SerializeToElement(value);return json.TryGetProperty("cost",out var cost)&&cost.ValueKind==JsonValueKind.Null;}

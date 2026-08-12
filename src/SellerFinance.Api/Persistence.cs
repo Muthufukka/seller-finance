@@ -433,11 +433,24 @@ public static class DbAnalytics
         return groups.Keys.Union(expenses.Keys).OrderBy(x=>x).Select(date=>{var f=FinanceCalculator.Calculate(groups.GetValueOrDefault(date)??[],expenses.GetValueOrDefault(date));return(object)new{date,revenue=f.Revenue,profit=f.OperatingProfit};}).ToArray();
     }
 
-    public static async Task<object[]> OrdersAsync(SellerFinanceDbContext db, string tenant)
+    public static async Task<object> OrdersAsync(SellerFinanceDbContext db, string tenant, string? status=null,
+        DateOnly? from=null, DateOnly? to=null, string? productId=null, decimal? profitFrom=null,
+        decimal? profitTo=null, string? search=null, int page=1, int pageSize=50)
     {
+        page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);
         var entities=await db.Orders.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        return (await FactsAsync(db,tenant)).Select(x=>{var f=FinanceCalculator.Calculate([x]);return(object)new { id=x.Id, externalId=entities[x.Id].ExternalId,date=x.Date,status=x.Status.ToString().ToUpperInvariant(),amount=x.Lines.Sum(y=>y.Revenue),items=x.Lines.Sum(y=>y.Quantity),profit=f.OperatingProfit,fees=f.MarketplaceFees,delivery=f.Delivery,complete=x.Lines.All(y=>y.UnitCost.HasValue),calculationDateFallback=entities[x.Id].CalculationDateFallback };}).ToArray();
+        var rows=(await FactsAsync(db,tenant,from,to)).Select(x=>{var f=FinanceCalculator.Calculate([x]);var entity=entities[x.Id];return new OrderListRow(x.Id,entity.ExternalId,x.Date,x.Status.ToString().ToUpperInvariant(),x.Lines.Sum(y=>y.Revenue),x.Lines.Sum(y=>y.Quantity),f.OperatingProfit,f.MarketplaceFees,f.Delivery,x.Lines.All(y=>y.UnitCost.HasValue),entity.CalculationDateFallback,x.Lines.Select(y=>y.ProductId).ToArray());});
+        if(!String.IsNullOrWhiteSpace(status))rows=rows.Where(x=>String.Equals(x.Status,status.Trim(),StringComparison.OrdinalIgnoreCase));
+        if(!String.IsNullOrWhiteSpace(productId))rows=rows.Where(x=>x.ProductIds.Contains(productId));
+        if(profitFrom.HasValue)rows=rows.Where(x=>x.Profit.HasValue&&x.Profit>=profitFrom);
+        if(profitTo.HasValue)rows=rows.Where(x=>x.Profit.HasValue&&x.Profit<=profitTo);
+        if(!String.IsNullOrWhiteSpace(search))rows=rows.Where(x=>x.ExternalId.Contains(search.Trim(),StringComparison.OrdinalIgnoreCase));
+        var filtered=rows.OrderByDescending(x=>x.Date).ThenByDescending(x=>x.ExternalId).ToArray();var total=filtered.Length;
+        var items=filtered.Skip((page-1)*pageSize).Take(pageSize).Select(x=>new{id=x.Id,externalId=x.ExternalId,date=x.Date,status=x.Status,amount=x.Amount,items=x.Items,profit=x.Profit,fees=x.Fees,delivery=x.Delivery,complete=x.Complete,calculationDateFallback=x.CalculationDateFallback}).ToArray();
+        return new{items,page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize)};
     }
+
+    private sealed record OrderListRow(string Id,string ExternalId,DateOnly Date,string Status,decimal Amount,int Items,decimal? Profit,decimal Fees,decimal Delivery,bool Complete,bool CalculationDateFallback,string[] ProductIds);
 
     public static async Task<object[]> ProductsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null)
     {
