@@ -43,6 +43,7 @@ public static class OrganizationDeletion
         var orderIds = await db.Orders.Where(x => x.OrganizationId == organizationId).Select(x => x.Id).ToArrayAsync(ct);
         var orderLineIds = await db.OrderLines.Where(x => orderIds.Contains(x.OrderId)).Select(x => x.Id).ToArrayAsync(ct);
         var importJobIds = await db.CostImportJobs.Where(x => x.OrganizationId == organizationId).Select(x => x.Id).ToArrayAsync(ct);
+        var financialImportJobIds = await db.FinancialImportJobs.Where(x => x.OrganizationId == organizationId).Select(x => x.Id).ToArrayAsync(ct);
         var deletedProducts = await db.Products.CountAsync(x => x.OrganizationId == organizationId, ct);
 
         db.ActualFees.RemoveRange(db.ActualFees.Where(x => x.OrganizationId == organizationId || orderLineIds.Contains(x.OrderLineId)));
@@ -55,6 +56,8 @@ public static class OrganizationDeletion
         db.CostImportJobs.RemoveRange(db.CostImportJobs.Where(x => x.OrganizationId == organizationId));
         db.FeeRules.RemoveRange(db.FeeRules.Where(x => x.OrganizationId == organizationId));
         db.Expenses.RemoveRange(db.Expenses.Where(x => x.OrganizationId == organizationId));
+        db.FinancialImportRows.RemoveRange(db.FinancialImportRows.Where(x => financialImportJobIds.Contains(x.ImportJobId)));
+        db.FinancialImportJobs.RemoveRange(db.FinancialImportJobs.Where(x => x.OrganizationId == organizationId));
         db.ExportJobs.RemoveRange(db.ExportJobs.Where(x => x.OrganizationId == organizationId));
         db.TelegramConnections.RemoveRange(db.TelegramConnections.Where(x => x.OrganizationId == organizationId));
         db.NotificationDeliveries.RemoveRange(db.NotificationDeliveries.Where(x => x.OrganizationId == organizationId));

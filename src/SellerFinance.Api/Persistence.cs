@@ -24,6 +24,8 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<FeeRuleEntity> FeeRules => Set<FeeRuleEntity>();
     public DbSet<ActualFeeEntity> ActualFees => Set<ActualFeeEntity>();
     public DbSet<ExpenseEntity> Expenses => Set<ExpenseEntity>();
+    public DbSet<FinancialImportJobEntity> FinancialImportJobs => Set<FinancialImportJobEntity>();
+    public DbSet<FinancialImportRowEntity> FinancialImportRows => Set<FinancialImportRowEntity>();
     public DbSet<ExportJobEntity> ExportJobs => Set<ExportJobEntity>();
     public DbSet<TelegramConnectionEntity> TelegramConnections => Set<TelegramConnectionEntity>();
     public DbSet<NotificationRuleEntity> NotificationRules => Set<NotificationRuleEntity>();
@@ -77,6 +79,13 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<ExpenseEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ExpenseEntity>().Property(x => x.Amount).HasPrecision(19,4);
         modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.Date });
+        modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.ImportFingerprint }).IsUnique().HasFilter("\"ImportFingerprint\" IS NOT NULL");
+        modelBuilder.Entity<FinancialImportJobEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<FinancialImportJobEntity>().HasIndex(x => new { x.OrganizationId, x.CreatedAt });
+        modelBuilder.Entity<FinancialImportRowEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<FinancialImportRowEntity>().Property(x => x.Amount).HasPrecision(19,4);
+        modelBuilder.Entity<FinancialImportRowEntity>().HasIndex(x => new { x.ImportJobId, x.RowNumber });
+        modelBuilder.Entity<FinancialImportRowEntity>().HasOne<FinancialImportJobEntity>().WithMany().HasForeignKey(x => x.ImportJobId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<ExportJobEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ExportJobEntity>().HasIndex(x => x.DownloadTokenHash).IsUnique();
         modelBuilder.Entity<ExportJobEntity>().HasIndex(x => new { x.Status, x.CreatedAt });
@@ -191,6 +200,8 @@ public enum FeeRuleScope { Default, Category, Product }
 public enum FeeValueType { Percentage, Fixed }
 public enum ExpenseType { Advertising, Packaging, Fulfillment, Services, Other }
 public enum ExpenseSource { Manual, Import }
+public enum FinancialImportType { Expenses, ActualFees }
+public enum FinancialImportStatus { Preview, Applied, Rejected, Expired }
 
 public sealed class FeeRuleEntity
 {
@@ -214,6 +225,8 @@ public sealed class ActualFeeEntity
     public Guid OrderLineId { get; set; }
     public decimal Amount { get; set; }
     public string Source { get; set; } = "Manual";
+    public Guid? ImportJobId { get; set; }
+    public string? ExternalRef { get; set; }
     public string CreatedByUserId { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
@@ -229,8 +242,47 @@ public sealed class ExpenseEntity
     public string? OrderId { get; set; }
     public string? Comment { get; set; }
     public ExpenseSource Source { get; set; } = ExpenseSource.Manual;
+    public Guid? ImportJobId { get; set; }
+    public string? ImportFingerprint { get; set; }
     public string CreatedByUserId { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class FinancialImportJobEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string CreatedByUserId { get; set; } = "";
+    public FinancialImportType Type { get; set; }
+    public string FileNameSafe { get; set; } = "";
+    public FinancialImportStatus Status { get; set; } = FinancialImportStatus.Preview;
+    public int TotalRows { get; set; }
+    public int ValidRows { get; set; }
+    public int UpdateRows { get; set; }
+    public int DuplicateRows { get; set; }
+    public int ErrorRows { get; set; }
+    public int ExpectedChanges { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddHours(24);
+    public DateTimeOffset? AppliedAt { get; set; }
+}
+
+public sealed class FinancialImportRowEntity
+{
+    public Guid Id { get; set; }
+    public Guid ImportJobId { get; set; }
+    public int RowNumber { get; set; }
+    public string Status { get; set; } = "Valid";
+    public string? Error { get; set; }
+    public ExpenseType? ExpenseType { get; set; }
+    public decimal? Amount { get; set; }
+    public DateOnly? Date { get; set; }
+    public string? ProductId { get; set; }
+    public string? OrderId { get; set; }
+    public Guid? OrderLineId { get; set; }
+    public string? Comment { get; set; }
+    public string? ExternalRef { get; set; }
+    public string? Fingerprint { get; set; }
 }
 
 public enum CostSource { Manual, CsvImport, XlsxImport, Legacy }
