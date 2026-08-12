@@ -27,6 +27,13 @@ builder.Services.ConfigureApplicationCookie(o =>
     o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
 });
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<TokenCipher>();
+builder.Services.AddHttpClient<KaspiClient>(client =>
+{
+    client.BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/");
+    client.Timeout=TimeSpan.FromSeconds(30);
+});
+builder.Services.AddHostedService<KaspiSyncWorker>();
 
 var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
@@ -133,6 +140,47 @@ api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db
 api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant())));
 api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant())));
 api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant())));
+api.MapGet("/kaspi/connection", async (HttpContext ctx,SellerFinanceDbContext db) =>
+{
+    var connection=await db.MarketplaceConnections.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi");
+    if(connection is null)return Results.Ok(new { connected=false });
+    var lastJob=await db.SyncJobs.AsNoTracking().Where(x=>x.MarketplaceConnectionId==connection.Id).OrderByDescending(x=>x.CreatedAt).FirstOrDefaultAsync();
+    return Results.Ok(new { connected=true,status=connection.Status.ToString(),connection.LastVerifiedAt,connection.LastSuccessfulSyncAt,connection.LastErrorCode,lastJob=lastJob is null?null:new {lastJob.Id,status=lastJob.Status.ToString(),lastJob.ImportedOrders,lastJob.ErrorCode,lastJob.CreatedAt} });
+});
+api.MapPost("/kaspi/connection", async (HttpContext ctx,KaspiConnectionRequest request,SellerFinanceDbContext db,TokenCipher cipher,KaspiClient kaspi,CancellationToken ct) =>
+{
+    if(!ctx.Membership().CanManageMembers())return Results.Forbid();
+    if(String.IsNullOrWhiteSpace(request.Token))return Results.BadRequest(new {title="Укажите API-токен Kaspi"});
+    KaspiResult verification;
+    try { verification=await kaspi.GetOrdersAsync(request.Token.Trim(),DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,ct); }
+    catch(HttpRequestException) { return Results.Problem("Kaspi API временно недоступен",statusCode:503); }
+    if(!verification.Success)return Results.Problem(verification.ErrorCode,statusCode:(int)verification.StatusCode);
+    var encrypted=cipher.Encrypt(request.Token.Trim());
+    var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi");
+    if(connection is null){connection=new(){Id=Guid.NewGuid(),OrganizationId=ctx.Tenant()};db.MarketplaceConnections.Add(connection);}
+    connection.TokenCiphertext=encrypted.Ciphertext;connection.TokenNonce=encrypted.Nonce;connection.TokenTag=encrypted.Tag;connection.Status=MarketplaceConnectionStatus.Active;connection.LastVerifiedAt=DateTimeOffset.UtcNow;connection.LastErrorCode=null;connection.UpdatedAt=DateTimeOffset.UtcNow;
+    AuditWriter.Add(db,ctx,"integration.connected","MarketplaceConnection",connection.Id.ToString(),"{\"provider\":\"Kaspi\"}");
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new {connected=true,status="Active"});
+});
+api.MapPost("/kaspi/verify", async (HttpContext ctx,SellerFinanceDbContext db,TokenCipher cipher,KaspiClient kaspi,CancellationToken ct) =>
+{
+    var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi",ct);
+    if(connection is null)return Results.NotFound();
+    var result=await kaspi.GetOrdersAsync(cipher.Decrypt(connection),DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,ct);
+    connection.Status=result.Success?MarketplaceConnectionStatus.Active:MarketplaceConnectionStatus.RequiresAttention;connection.LastVerifiedAt=result.Success?DateTimeOffset.UtcNow:null;connection.LastErrorCode=result.ErrorCode;await db.SaveChangesAsync(ct);
+    return result.Success?Results.Ok(new {status="Active"}):Results.Problem(result.ErrorCode,statusCode:(int)result.StatusCode);
+});
+api.MapPost("/kaspi/sync", async (HttpContext ctx,SellerFinanceDbContext db,CancellationToken ct) =>
+{
+    if(!ctx.Membership().CanWrite())return Results.Forbid();
+    var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi",ct);
+    if(connection is null)return Results.NotFound();
+    if(await db.SyncJobs.AnyAsync(x=>x.MarketplaceConnectionId==connection.Id&&(x.Status==SyncJobStatus.Queued||x.Status==SyncJobStatus.Running||x.Status==SyncJobStatus.RetryScheduled),ct))return Results.Conflict(new {title="Синхронизация уже выполняется"});
+    var job=new SyncJobEntity{Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),MarketplaceConnectionId=connection.Id,WindowFrom=DateTimeOffset.UtcNow.AddDays(-30),WindowTo=DateTimeOffset.UtcNow};db.SyncJobs.Add(job);AuditWriter.Add(db,ctx,"integration.sync.queued","SyncJob",job.Id.ToString());await db.SaveChangesAsync(ct);
+    return Results.Accepted($"/api/v1/kaspi/sync/{job.Id}",new {job.Id,status=job.Status.ToString()});
+});
+api.MapGet("/kaspi/sync/{id:guid}",async(HttpContext ctx,Guid id,SellerFinanceDbContext db)=>{var job=await db.SyncJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());return job is null?Results.NotFound():Results.Ok(new{job.Id,status=job.Status.ToString(),job.Attempt,job.ImportedOrders,job.ErrorCode,job.CreatedAt,job.CompletedAt});});
 api.MapPost("/products/{id}/costs", async (HttpContext ctx,string id,ProductCostRequest request,SellerFinanceDbContext db) =>
 {
     if (!ctx.Membership().CanWrite()) return Results.Forbid();
@@ -155,4 +203,5 @@ record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);
 record AcceptInvitationRequest(string Token);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
+record KaspiConnectionRequest(string Token);
 public partial class Program { }

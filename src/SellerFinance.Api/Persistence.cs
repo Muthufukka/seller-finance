@@ -16,6 +16,8 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<OrganizationUserEntity> OrganizationUsers => Set<OrganizationUserEntity>();
     public DbSet<OrganizationInvitationEntity> OrganizationInvitations => Set<OrganizationInvitationEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
+    public DbSet<MarketplaceConnectionEntity> MarketplaceConnections => Set<MarketplaceConnectionEntity>();
+    public DbSet<SyncJobEntity> SyncJobs => Set<SyncJobEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -39,7 +41,47 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrganizationInvitationEntity>().HasIndex(x => x.TokenHash).IsUnique();
         modelBuilder.Entity<AuditLogEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<AuditLogEntity>().HasIndex(x => new { x.OrganizationId, x.CreatedAt });
+        modelBuilder.Entity<MarketplaceConnectionEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<MarketplaceConnectionEntity>().HasIndex(x => new { x.OrganizationId, x.Provider }).IsUnique();
+        modelBuilder.Entity<SyncJobEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<SyncJobEntity>().HasIndex(x => new { x.Status, x.NextAttemptAt });
     }
+}
+
+public enum MarketplaceConnectionStatus { PendingVerification, Active, RequiresAttention, Disabled }
+public enum SyncJobStatus { Queued, Running, Succeeded, RetryScheduled, RequiresAttention }
+
+public sealed class MarketplaceConnectionEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string Provider { get; set; } = "Kaspi";
+    public byte[] TokenCiphertext { get; set; } = [];
+    public byte[] TokenNonce { get; set; } = [];
+    public byte[] TokenTag { get; set; } = [];
+    public MarketplaceConnectionStatus Status { get; set; } = MarketplaceConnectionStatus.PendingVerification;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastVerifiedAt { get; set; }
+    public DateTimeOffset? LastSuccessfulSyncAt { get; set; }
+    public string? LastErrorCode { get; set; }
+}
+
+public sealed class SyncJobEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public Guid MarketplaceConnectionId { get; set; }
+    public SyncJobStatus Status { get; set; } = SyncJobStatus.Queued;
+    public DateTimeOffset WindowFrom { get; set; }
+    public DateTimeOffset WindowTo { get; set; }
+    public int Attempt { get; set; }
+    public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public int ImportedOrders { get; set; }
+    public string? ErrorCode { get; set; }
 }
 
 public sealed class AppUser : IdentityUser

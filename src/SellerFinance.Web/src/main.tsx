@@ -6,8 +6,9 @@ import './styles.css'
 type Summary = { revenue:number; orders:number; units:number; cogs:number|null; grossProfit:number; marketplaceFees:number; delivery:number; operatingProfit:number; operatingMarginPct:number|null; coveragePct:number; isPreliminary:boolean }
 type Product = { id:string; sku:string; name:string; units:number; revenue:number; cogs:number|null; profit:number|null; margin:number|null; cost:number|null; status:string }
 type Point = { date:string; revenue:number; profit:number }
-type Page = 'dashboard'|'products'|'orders'|'abc'
+type Page = 'dashboard'|'products'|'orders'|'abc'|'integrations'
 type Session = { userId:string; email:string; displayName:string; organizationId:string; organizationName:string; role:string; plan:string }
+type Order = { id:string; date:string; status:string; amount:number; items:number; complete:boolean }
 
 const fallback:{summary:Summary; products:Product[]; timeseries:Point[]} = {
   summary:{revenue:173835,orders:6,units:12,cogs:null,grossProfit:83835,marketplaceFees:17798,delivery:3850,operatingProfit:49687,operatingMarginPct:28.58,coveragePct:92.53,isPreliminary:true},
@@ -26,12 +27,14 @@ function App(){
   const [page,setPage]=useState<Page>('dashboard'), [menu,setMenu]=useState(false), [loading,setLoading]=useState(true)
   const [session,setSession]=useState<Session|null>(null), [authReady,setAuthReady]=useState(false)
   const [summary,setSummary]=useState(fallback.summary), [products,setProducts]=useState(fallback.products), [points,setPoints]=useState(fallback.timeseries)
+  const [orders,setOrders]=useState<Order[]>([])
   useEffect(()=>{ fetch('/api/v1/session').then(async r=>r.ok?setSession(await r.json()):setSession(null)).finally(()=>setAuthReady(true)) },[])
   useEffect(()=>{ if(!session)return; const headers={'X-Organization-Id':session.organizationId}; Promise.all([
     fetch('/api/v1/analytics/summary',{headers}).then(r=>r.ok?r.json():Promise.reject()),
     fetch('/api/v1/analytics/products',{headers}).then(r=>r.ok?r.json():Promise.reject()),
-    fetch('/api/v1/analytics/timeseries',{headers}).then(r=>r.ok?r.json():Promise.reject())
-  ]).then(([s,p,t])=>{setSummary(s);setProducts(p);setPoints(t)}).catch(()=>{}).finally(()=>setLoading(false)) },[session])
+    fetch('/api/v1/analytics/timeseries',{headers}).then(r=>r.ok?r.json():Promise.reject()),
+    fetch('/api/v1/orders',{headers}).then(r=>r.ok?r.json():Promise.reject())
+  ]).then(([s,p,t,o])=>{setSummary(s);setProducts(p);setPoints(t);setOrders(o)}).catch(()=>{}).finally(()=>setLoading(false)) },[session])
   if(!authReady)return <div className="auth-loading">Seller Finance</div>
   if(!session)return <AuthScreen onAuthenticated={setSession}/>
   const navigate=(p:Page)=>{setPage(p);setMenu(false)}
@@ -41,8 +44,9 @@ function App(){
       <header><button className="icon mobile" onClick={()=>setMenu(true)} aria-label="Открыть меню"><Menu/></button><div className="org"><span className="orgmark">{session.organizationName[0]}</span><div><b>{session.organizationName}</b><small>{session.role}</small></div><ChevronDown size={16}/></div><div className="head-actions"><button className="icon"><Search/></button><button className="avatar" title={`${session.email} — выйти`} onClick={async()=>{await fetch('/api/v1/auth/logout',{method:'POST'});setSession(null)}}>{(session.displayName||session.email).slice(0,2).toUpperCase()}</button></div></header>
       {page==='dashboard'&&<Dashboard summary={summary} products={products} points={points} loading={loading}/>} 
       {page==='products'&&<Products products={products}/>} 
-      {page==='orders'&&<EmptyPage title="Заказы" text="Здесь появятся заказы после синхронизации Kaspi." icon={<ShoppingBag/>}/>} 
+      {page==='orders'&&<Orders orders={orders}/>}
       {page==='abc'&&<EmptyPage title="ABC-анализ" text="Товары будут распределены по вкладу в операционную прибыль." icon={<BarChart3/>}/>} 
+      {page==='integrations'&&<Integrations session={session}/>}
     </main>
   </div>
 }
@@ -55,7 +59,7 @@ function AuthScreen({onAuthenticated}:{onAuthenticated:(session:Session)=>void})
 
 function Sidebar({page,open,onClose,onNav}:{page:Page;open:boolean;onClose:()=>void;onNav:(p:Page)=>void}){
  const nav:[Page,string,React.ReactNode][]=[['dashboard','Обзор',<LayoutDashboard/>],['products','Товары',<Box/>],['orders','Заказы',<ShoppingBag/>],['abc','ABC-анализ',<BarChart3/>]]
- return <><aside className={open?'open':''}><div className="brand"><span><WalletCards/></span><div>Seller<b>Finance</b></div><button className="icon mobile" onClick={onClose}><X/></button></div><nav><small>АНАЛИТИКА</small>{nav.map(([id,label,icon])=><button key={id} className={page===id?'active':''} onClick={()=>onNav(id)}>{icon}{label}</button>)}<small>УПРАВЛЕНИЕ</small><button><RefreshCw/>Интеграции<span className="dot"/></button><button><Settings/>Настройки</button></nav><div className="plan"><div><Sparkles size={16}/>Тариф Pro</div><b>8 дней до оплаты</b><span><i/></span><small>2 из 3 магазинов</small></div></aside>{open&&<div className="shade" onClick={onClose}/>}</>
+ return <><aside className={open?'open':''}><div className="brand"><span><WalletCards/></span><div>Seller<b>Finance</b></div><button className="icon mobile" onClick={onClose}><X/></button></div><nav><small>АНАЛИТИКА</small>{nav.map(([id,label,icon])=><button key={id} className={page===id?'active':''} onClick={()=>onNav(id)}>{icon}{label}</button>)}<small>УПРАВЛЕНИЕ</small><button className={page==='integrations'?'active':''} onClick={()=>onNav('integrations')}><RefreshCw/>Интеграции<span className="dot"/></button><button><Settings/>Настройки</button></nav><div className="plan"><div><Sparkles size={16}/>Тариф Trial</div><b>Пилотный период</b><span><i/></span><small>1 организация</small></div></aside>{open&&<div className="shade" onClick={onClose}/>}</>
 }
 
 function Dashboard({summary,products,points,loading}:{summary:Summary;products:Product[];points:Point[];loading:boolean}){
@@ -73,6 +77,15 @@ function Dashboard({summary,products,points,loading}:{summary:Summary;products:P
 }
 
 function Kpi({label,value,delta,sub,good}:{label:string;value:string;delta?:string;sub?:string;good?:boolean}){return <article className="kpi"><span>{label}</span><b>{value}</b><div className={good?'good':''}>{good?<TrendingUp/>:delta?<TrendingDown/>:null}{delta&&<strong>{delta}</strong>}{sub&&<small>{sub}</small>}{delta&&<small>к прошлой неделе</small>}</div></article>}
+function Orders({orders}:{orders:Order[]}){return <section className="content"><div className="title-row"><div><span className="eyebrow">ПРОДАЖИ</span><h1>Заказы</h1><p>Заказы Kaspi и полнота финансового расчёта.</p></div></div><article className="table-card standalone"><div className="table-wrap"><table><thead><tr><th>Заказ</th><th>Дата</th><th>Статус</th><th>Позиций</th><th>Сумма</th><th>Расчёт</th></tr></thead><tbody>{orders.map(o=><tr key={o.id}><td>{o.id}</td><td>{new Date(o.date).toLocaleDateString('ru-RU')}</td><td>{o.status}</td><td>{o.items}</td><td>{money(o.amount)}</td><td><span className={o.complete?'pill':'pill missing'}>{o.complete?'Полный':'Нужна себестоимость'}</span></td></tr>)}</tbody></table>{orders.length===0&&<div className="empty-row">Заказов пока нет. Подключите Kaspi и выполните синхронизацию.</div>}</div></article></section>}
+
+function Integrations({session}:{session:Session}){
+ const [state,setState]=useState<any>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');const headers={'X-Organization-Id':session.organizationId};
+ const load=()=>fetch('/api/v1/kaspi/connection',{headers}).then(r=>r.json()).then(setState);useEffect(()=>{load()},[]);
+ const connect=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();setBusy(true);setMessage('');const token=String(new FormData(e.currentTarget).get('token')||'');const r=await fetch('/api/v1/kaspi/connection',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({token})});setMessage(r.ok?'Kaspi успешно подключён.':(await r.json().catch(()=>null))?.detail||'Не удалось проверить токен.');setBusy(false);if(r.ok)load()};
+ const sync=async()=>{setBusy(true);const r=await fetch('/api/v1/kaspi/sync',{method:'POST',headers});setMessage(r.ok?'Синхронизация поставлена в очередь.':'Не удалось запустить синхронизацию.');setBusy(false);setTimeout(load,1500)};
+ return <section className="content"><div className="title-row"><div><span className="eyebrow">ИНТЕГРАЦИИ</span><h1>Kaspi Магазин</h1><p>Токен шифруется AES-256-GCM и никогда не отображается после сохранения.</p></div></div><article className="integration-card"><div className="integration-status"><span className="orgmark">K</span><div><b>Kaspi Магазин</b><small>{state?.connected?`Статус: ${state.status}`:'Не подключён'}</small></div></div>{state?.connected?<><dl><div><dt>Последняя проверка</dt><dd>{state.lastVerifiedAt?new Date(state.lastVerifiedAt).toLocaleString('ru-RU'):'—'}</dd></div><div><dt>Последняя синхронизация</dt><dd>{state.lastSuccessfulSyncAt?new Date(state.lastSuccessfulSyncAt).toLocaleString('ru-RU'):'—'}</dd></div><div><dt>Задание</dt><dd>{state.lastJob?.status||'—'} {state.lastJob?.importedOrders?`· ${state.lastJob.importedOrders} заказов`:''}</dd></div></dl><button className="primary" onClick={sync} disabled={busy}><RefreshCw className={busy?'spin':''}/>Синхронизировать 30 дней</button></>:<form className="token-form" onSubmit={connect}><label>API-токен Kaspi<input name="token" type="password" required autoComplete="off" placeholder="Вставьте токен из кабинета Kaspi"/></label><button className="primary" disabled={busy}>{busy?'Проверяем…':'Проверить и подключить'}</button></form>}{message&&<p className="integration-message">{message}</p>}</article></section>
+}
 function ProductTable({products}:{products:Product[]}){return <div className="table-wrap"><table><thead><tr><th>Товар</th><th>Выручка</th><th>Прибыль</th><th>Маржа</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><span className="product-icon">{p.name[0]}</span><div><b>{p.name}</b><small>{p.sku}</small></div></td><td>{money(p.revenue)}</td><td className={p.profit===null?'muted':'positive'}>{money(p.profit)}</td><td><span className={p.margin===null?'pill missing':'pill'}>{pct(p.margin)}</span></td></tr>)}</tbody></table></div>}
 function Products({products}:{products:Product[]}){return <section className="content"><div className="title-row"><div><span className="eyebrow">КАТАЛОГ</span><h1>Товары</h1><p>Продажи, себестоимость и прибыль по SKU.</p></div><button className="primary">Импорт себестоимости</button></div><article className="table-card standalone"><ProductTable products={products}/></article></section>}
 function EmptyPage({title,text,icon}:{title:string;text:string;icon:React.ReactNode}){return <section className="content"><div className="empty"><span>{icon}</span><h1>{title}</h1><p>{text}</p><button className="primary">Перейти к интеграциям</button></div></section>}
