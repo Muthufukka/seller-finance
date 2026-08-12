@@ -1,4 +1,6 @@
 using SellerFinance.Domain;
+using SellerFinance.Api;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
@@ -6,8 +8,16 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
     .AllowAnyHeader()
     .AllowAnyMethod()));
 builder.Services.AddSingleton<DemoStore>();
+var databaseConnection = DatabaseConfiguration.GetConnectionString(builder.Configuration);
+if (databaseConnection is not null)
+    builder.Services.AddDbContext<SellerFinanceDbContext>(options => options.UseNpgsql(databaseConnection));
 
 var app = builder.Build();
+if (databaseConnection is not null)
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await DatabaseSeed.InitializeAsync(scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>());
+}
 app.UseCors();
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -25,6 +35,17 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "SellerFinance.Api" }));
+if (databaseConnection is not null)
+{
+    app.MapGet("/health/database", async (SellerFinanceDbContext db) =>
+        await db.Database.CanConnectAsync()
+            ? Results.Ok(new { status = "healthy", provider = "PostgreSQL" })
+            : Results.Problem("Database connection failed", statusCode: 503));
+}
+else
+{
+    app.MapGet("/health/database", () => Results.Ok(new { status = "not-configured" }));
+}
 
 var api = app.MapGroup("/api/v1");
 api.MapGet("/session", (HttpContext ctx, DemoStore store) =>
