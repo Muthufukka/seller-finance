@@ -179,16 +179,16 @@ function App() {
       .then(async (r) => (r.ok ? setSession(await r.json()) : setSession(null)))
       .finally(() => setAuthReady(true));
   }, []);
-  useEffect(()=>{if(!session)return setOrganizations([]);fetch("/api/v1/organizations",{headers:{"X-Organization-Id":session.organizationId}}).then(r=>r.ok?r.json():[]).then(setOrganizations);},[session?.organizationId]);
+  useEffect(()=>{if(!session)return setOrganizations([]);fetch("/api/v1/organizations").then(r=>r.ok?r.json():[]).then(setOrganizations);},[session?.organizationId]);
   useEffect(() => {
     const invitationToken = new URLSearchParams(location.search).get("invitationToken");
     if (!session || !invitationToken) return;
-    const currentHeaders = { "X-Organization-Id": session.organizationId, "Content-Type": "application/json" };
+    const currentHeaders = { "Content-Type": "application/json" };
     fetch("/api/v1/invitations/accept", { method: "POST", headers: currentHeaders, body: JSON.stringify({ token: invitationToken }) })
       .then(async (response) => {
         if (!response.ok) throw new Error("invitation");
         const accepted = await response.json();
-        return fetch("/api/v1/session", { headers: { "X-Organization-Id": accepted.organizationId } });
+        return fetch("/api/v1/session");
       })
       .then(async (response) => {
         if (!response.ok) throw new Error("session");
@@ -200,7 +200,7 @@ function App() {
   }, [session?.userId]);
   useEffect(() => {
     if (!session) return;
-    const headers = { "X-Organization-Id": session.organizationId };
+    const headers:Record<string,string> = {};
     const range = periodRange(period, customFrom, customTo);
     if (!range) return;
     const query = `?dateFrom=${range.from}&dateTo=${range.to}&completeCostsOnly=${completeCostsOnly}`;
@@ -234,12 +234,12 @@ function App() {
           <div className="org">
             <span className="orgmark">{session.organizationName[0]}</span>
             <label>
-              <select value={session.organizationId} aria-label={t("header.organization")} onChange={async(e)=>{const r=await fetch("/api/v1/session",{headers:{"X-Organization-Id":e.target.value}});if(r.ok){setPage("dashboard");setSession(await r.json());}}}>
+              <select value={session.organizationId} aria-label={t("header.organization")} onChange={async(e)=>{const r=await fetch(`/api/v1/organizations/${e.target.value}/select`,{method:"POST"});if(r.ok){const selected=await fetch("/api/v1/session");if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}}>
                 {organizations.length?organizations.map(o=><option key={o.id} value={o.id}>{o.name}</option>):<option value={session.organizationId}>{session.organizationName}</option>}
               </select>
               <small>{session.role}</small>
             </label>
-            <button className="org-add" title={t("header.createOrganization")} aria-label={t("header.createOrganization")} onClick={async()=>{const name=window.prompt(t("header.organizationPrompt"));if(!name)return;const r=await fetch("/api/v1/organizations",{method:"POST",headers:{"X-Organization-Id":session.organizationId,"Content-Type":"application/json"},body:JSON.stringify({name})});if(!r.ok)return window.alert(t("header.organizationCreateError"));const created=await r.json();const selected=await fetch("/api/v1/session",{headers:{"X-Organization-Id":created.id}});if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}>+</button>
+            <button className="org-add" title={t("header.createOrganization")} aria-label={t("header.createOrganization")} onClick={async()=>{const name=window.prompt(t("header.organizationPrompt"));if(!name)return;const r=await fetch("/api/v1/organizations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});if(!r.ok)return window.alert(t("header.organizationCreateError"));const selected=await fetch("/api/v1/session");if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}>+</button>
           </div>
           <div className="head-actions">
             <select className="language-select" aria-label="Language" value={locale} onChange={e=>setLocale(e.target.value as "ru"|"kk")}><option value="ru">RU</option><option value="kk">ҚАЗ</option></select>
@@ -701,7 +701,7 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
     [totalPages, setTotalPages] = useState(1),
     [total, setTotal] = useState(initialOrders.length),
     [busy, setBusy] = useState(false);
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const load = async (nextPage = page) => {
     setBusy(true);
     const q = new URLSearchParams({ page: String(nextPage), pageSize: "25" });
@@ -898,7 +898,7 @@ function Orders({ orders, session }: { orders: Order[]; session: Session }) {
   const [detail, setDetail] = useState<any>(null);
   const open = async (id: string) => {
     const r = await fetch(`/api/v1/orders/${id}`, {
-      headers: { "X-Organization-Id": session.organizationId },
+      headers: {},
     });
     if (r.ok) setDetail(await r.json());
   };
@@ -1005,7 +1005,7 @@ function Integrations({ session }: { session: Session }) {
   const [state, setState] = useState<any>(null),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const load = () =>
     fetch("/api/v1/kaspi/connection", { headers })
       .then((r) => r.json())
@@ -1106,7 +1106,7 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
     setError("");
     setRows([]);
     fetch(`/api/v1/analytics/abc?${query}`, {
-      headers: { "X-Organization-Id": session.organizationId },
+      headers: {},
       signal: controller.signal,
     })
       .then((r) => r.ok ? r.json() : Promise.reject())
@@ -1180,7 +1180,7 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
   const [preview, setPreview] = useState<any>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1269,7 +1269,7 @@ function Expenses({ session, products, orders }: { session: Session; products: P
   const expenseTypeLabel = (type: string) => ({ Advertising: t("expenses.advertising"), Packaging: t("expenses.packaging"), Fulfillment: t("expenses.fulfillment"), Services: t("expenses.services"), Other: t("expenses.other") }[type] || type);
   const [rows, setRows] = useState<any[]>([]),
     [message, setMessage] = useState("");
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const load = () =>
     fetch("/api/v1/expenses", { headers })
       .then((r) => r.json())
@@ -1386,7 +1386,7 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
     [scope, setScope] = useState("Default"),
     [endDates, setEndDates] = useState<Record<string, string>>({});
   const categories = [...new Set(products.map((p) => p.category?.trim()).filter((x): x is string => Boolean(x)))].sort();
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const load = () =>
     fetch("/api/v1/fee-rules", { headers })
       .then((r) => r.json())
@@ -1509,7 +1509,7 @@ function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Se
   const [jobs, setJobs] = useState<any[]>(() => {
     try { return JSON.parse(sessionStorage.getItem(storageKey) || "[]"); } catch { return []; }
   }), [busy, setBusy] = useState(false), [message, setMessage] = useState("");
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const create = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setBusy(true);
@@ -1619,7 +1619,7 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
     [invitations, setInvitations] = useState<any[]>([]),
     [invitationLink, setInvitationLink] = useState(""),
     [deleting, setDeleting] = useState(false);
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const canManage = session.role === "Owner" || session.role === "Admin";
   const canWrite = session.role !== "Viewer";
   const load = () =>
@@ -1835,7 +1835,7 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
 
 function AdminPage({ session }: { session: Session }) {
   const [rows, setRows] = useState<any[]>([]);
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const load = () =>
     fetch("/api/v1/admin/organizations", { headers })
       .then((r) => r.json())
@@ -1943,7 +1943,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
     [seriesLoading, setSeriesLoading] = useState(false),
     [preview, setPreview] = useState<any>(null),
     [message, setMessage] = useState("");
-  const headers = { "X-Organization-Id": session.organizationId };
+  const headers:Record<string,string> = {};
   const normalized=products.map(p=>({...p,productStatus:statusOverrides[p.id]??p.productStatus??(p.status==="archived"?"Archived":"Active")}));
   const filtered = normalized.filter((p) => (p.sku + " " + p.name).toLowerCase().includes(search.toLowerCase()) && (filter === "all" || (filter === "missing" && p.cost === null) || (filter === "profitable" && (p.profit ?? 0) > 0) || (filter === "loss" && (p.profit ?? 0) < 0) || (filter === "archived" && p.productStatus === "Archived"))).sort((a,b)=>{const [key,direction]=sort.split("-");const av=key==="name"?a.name.toLocaleLowerCase("ru"):key==="sku"?a.sku.toLocaleLowerCase("ru"):(a as any)[key]??Number.NEGATIVE_INFINITY;const bv=key==="name"?b.name.toLocaleLowerCase("ru"):key==="sku"?b.sku.toLocaleLowerCase("ru"):(b as any)[key]??Number.NEGATIVE_INFINITY;const result=typeof av==="string"?av.localeCompare(bv,"ru"):av-bv;return direction==="desc"?-result:result;});
   const open = async (p: Product) => {

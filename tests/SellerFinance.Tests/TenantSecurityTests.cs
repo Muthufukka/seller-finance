@@ -9,7 +9,7 @@ namespace SellerFinance.Tests;
 public sealed class TenantSecurityTests
 {
     [Fact]
-    public async Task ResolveAsync_Rejects_CrossTenant_Selector()
+    public async Task ResolveAsync_Rejects_CrossTenant_Cookie_Claim()
     {
         await using var db = CreateDb();
         AddOrganization(db,"org-a");AddOrganization(db,"org-b");
@@ -20,6 +20,14 @@ public sealed class TenantSecurityTests
         var result = await TenantSecurity.ResolveAsync(context, db);
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_Ignores_Attacker_Tenant_Header()
+    {
+        await using var db=CreateDb();AddOrganization(db,"org-a");AddOrganization(db,"org-b");db.OrganizationUsers.AddRange(Member("user","org-a",OrganizationRole.Analyst),Member("user","org-b"));await db.SaveChangesAsync();var context=Context("user","org-a");context.Request.Headers["X-Organization-Id"]="org-b";
+        var result=await TenantSecurity.ResolveAsync(context,db);
+        Assert.NotNull(result);Assert.Equal("org-a",result.OrganizationId);Assert.Equal(OrganizationRole.Analyst,result.Role);
     }
 
     [Fact]
@@ -86,8 +94,7 @@ public sealed class TenantSecurityTests
     private static DefaultHttpContext Context(string userId, string organizationId,string? email=null)
     {
         var context = new DefaultHttpContext();
-        var claims=new List<Claim>{new(ClaimTypes.NameIdentifier,userId)};if(email is not null)claims.Add(new(ClaimTypes.Name,email));context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
-        context.Request.Headers["X-Organization-Id"] = organizationId;
+        var claims=new List<Claim>{new(ClaimTypes.NameIdentifier,userId),TenantSecurity.ActiveOrganization(organizationId)};if(email is not null)claims.Add(new(ClaimTypes.Name,email));context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return context;
     }
 }

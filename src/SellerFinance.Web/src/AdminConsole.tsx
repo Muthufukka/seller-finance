@@ -8,7 +8,7 @@ type Flag={key:string;enabled:boolean}
 
 export function AdminConsole({session}:Props){
  const {t,locale}=useI18n(),localeCode=locale==='kk'?'kk-KZ':'ru-RU'
- const headers={'X-Organization-Id':session.organizationId},[organizations,setOrganizations]=useState<Organization[]>([]),[jobs,setJobs]=useState<SyncJob[]>([]),[audit,setAudit]=useState<any[]>([]),[selected,setSelected]=useState(''),[flags,setFlags]=useState<Flag[]>([]),[message,setMessage]=useState(''),[loading,setLoading]=useState(true)
+ const headers:Record<string,string>={},[organizations,setOrganizations]=useState<Organization[]>([]),[jobs,setJobs]=useState<SyncJob[]>([]),[audit,setAudit]=useState<any[]>([]),[selected,setSelected]=useState(''),[flags,setFlags]=useState<Flag[]>([]),[message,setMessage]=useState(''),[loading,setLoading]=useState(true)
  const load=async()=>{try{const [orgResponse,jobsResponse,auditResponse]=await Promise.all([fetch('/api/v1/admin/organizations',{headers}),fetch('/api/v1/admin/sync-jobs?pageSize=50',{headers}),fetch('/api/v1/admin/audit?take=30',{headers})]);if(!orgResponse.ok||!jobsResponse.ok||!auditResponse.ok){setMessage(t('admin.loadError'));return}const rows=await orgResponse.json();setOrganizations(rows);if(!selected&&rows.length)setSelected(rows[0].id);setJobs((await jobsResponse.json()).items);setAudit(await auditResponse.json())}catch{setMessage(t('admin.loadError'))}finally{setLoading(false)}}
  useEffect(()=>{load()},[])
  useEffect(()=>{if(selected)fetch(`/api/v1/admin/organizations/${selected}/feature-flags`,{headers}).then(r=>r.ok?r.json():Promise.reject()).then(setFlags).catch(()=>setMessage(t('admin.loadError')))},[selected])

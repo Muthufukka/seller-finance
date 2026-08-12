@@ -25,16 +25,26 @@ public sealed record TenantMembership(string OrganizationId, OrganizationRole Ro
 
 public static class TenantSecurity
 {
+    public const string ActiveOrganizationClaim="seller_finance:organization_id";
     public static async Task<TenantMembership?> ResolveAsync(HttpContext context, SellerFinanceDbContext db)
     {
         var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (String.IsNullOrWhiteSpace(userId)) return null;
-        var requested = context.Request.Headers["X-Organization-Id"].ToString();
+        var requested = context.User.FindFirstValue(ActiveOrganizationClaim);
         var now=DateTimeOffset.UtcNow;var query = from memberRow in db.OrganizationUsers.AsNoTracking() join organization in db.Organizations.AsNoTracking() on memberRow.OrganizationId equals organization.Id join subscription in db.Subscriptions.AsNoTracking() on organization.Id equals subscription.OrganizationId where memberRow.UserId==userId&&memberRow.JoinedAt!=null&&organization.Status=="Active"&&(subscription.Status==SubscriptionStatus.Active||subscription.Status==SubscriptionStatus.Trialing)&&subscription.PeriodEnd>now select memberRow;
         var membership = String.IsNullOrWhiteSpace(requested)
             ? await query.OrderBy(x => x.JoinedAt).FirstOrDefaultAsync()
             : await query.SingleOrDefaultAsync(x => x.OrganizationId == requested);
         return membership is null ? null : new(membership.OrganizationId, membership.Role);
+    }
+
+    public static Claim ActiveOrganization(string organizationId)=>new(ActiveOrganizationClaim,organizationId);
+    public static async Task SetActiveOrganizationAsync(UserManager<AppUser> users,AppUser user,string organizationId)
+    {
+        var existing=(await users.GetClaimsAsync(user)).Where(x=>x.Type==ActiveOrganizationClaim).ToArray();
+        if(existing.Length==1&&existing[0].Value==organizationId)return;
+        if(existing.Length>0){var removed=await users.RemoveClaimsAsync(user,existing);if(!removed.Succeeded)throw new InvalidOperationException("Unable to replace active organization claim");}
+        var added=await users.AddClaimAsync(user,ActiveOrganization(organizationId));if(!added.Succeeded)throw new InvalidOperationException("Unable to persist active organization claim");
     }
 
     public static bool CanWrite(this TenantMembership membership) => membership.Role is OrganizationRole.Owner or OrganizationRole.Admin or OrganizationRole.Analyst;

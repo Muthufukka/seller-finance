@@ -24,13 +24,14 @@ for (const path of ['/health', '/health/database', '/health/ready']) {
 }
 
 for (const path of ['/api/v1/session', '/api/v1/kaspi/connections', '/api/v1/admin/organizations']) await request(path, 401)
+await request('/api/v1/organizations/not-authorized/select', 401, { method: 'POST' })
 const docs = await request('/api-docs', 200)
 if (!(await docs.response.text()).includes('/openapi/v1.json')) throw new Error('API docs do not link the OpenAPI contract')
 const contractResponse = await request('/openapi/v1.json', 200)
 const contractText = await contractResponse.response.text()
 const contract = JSON.parse(contractText)
 if (!String(contract.openapi || '').startsWith('3.')) throw new Error('Invalid OpenAPI version')
-for (const path of ['/api/v1/auth/login', '/api/v1/products', '/api/v1/orders', '/api/v1/analytics/summary', '/api/v1/exports']) if (!contract.paths?.[path]) throw new Error(`OpenAPI path is missing: ${path}`)
+for (const path of ['/api/v1/auth/login', '/api/v1/products', '/api/v1/orders', '/api/v1/analytics/summary', '/api/v1/exports', '/api/v1/organizations/{id}/select']) if (!contract.paths?.[path]) throw new Error(`OpenAPI path is missing: ${path}`)
 for (const forbidden of ['TOKEN_ENCRYPTION_KEY', 'DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'seller_finance_user']) if (contractText.includes(forbidden)) throw new Error(`OpenAPI leaks forbidden value: ${forbidden}`)
 const deletion = await request('/api/v1/organizations/not-authorized', 401, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ organizationName: 'none', password: 'none' }) })
 if (deletion.response.status !== 401) throw new Error('Destructive endpoint is not protected')

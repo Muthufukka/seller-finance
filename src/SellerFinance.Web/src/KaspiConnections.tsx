@@ -8,7 +8,7 @@ type State={items:Connection[];maxStores:number;activeStores:number}
 
 export function KaspiConnections({session}:Props){
  const {t,locale}=useI18n(),localeCode=locale==='kk'?'kk-KZ':'ru-RU'
- const headers={'X-Organization-Id':session.organizationId},[state,setState]=useState<State>({items:[],maxStores:1,activeStores:0}),[busy,setBusy]=useState(''),[message,setMessage]=useState('');const canManage=session.role==='Owner'||session.role==='Admin',canWrite=session.role!=='Viewer'
+ const headers:Record<string,string>={},[state,setState]=useState<State>({items:[],maxStores:1,activeStores:0}),[busy,setBusy]=useState(''),[message,setMessage]=useState('');const canManage=session.role==='Owner'||session.role==='Admin',canWrite=session.role!=='Viewer'
  const load=async()=>{try{const response=await fetch('/api/v1/kaspi/connections',{headers});if(response.ok){setState(await response.json());return true}}catch{}setMessage(t('kaspi.loadError'));return false}
  useEffect(()=>{load()},[])
  const result=async(request:Promise<Response>,success:string)=>{try{const response=await request,data=await response.json().catch(()=>null);setMessage(response.ok?success:data?.title||data?.detail||t('kaspi.operationError'));if(response.ok)await load();setBusy('');return response.ok}catch{setMessage(t('kaspi.operationError'));setBusy('');return false}}
