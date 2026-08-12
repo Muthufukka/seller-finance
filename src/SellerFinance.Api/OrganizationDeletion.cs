@@ -1,10 +1,23 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace SellerFinance.Api;
 
 public enum OrganizationDeletionFailure { None, NotFound, Forbidden, ConfirmationMismatch, ActiveSync }
 
 public sealed record OrganizationDeletionResult(OrganizationDeletionFailure Failure, bool UserDeleted = false, int DeletedOrders = 0, int DeletedProducts = 0);
+public sealed record DeleteOrganizationRequest(string OrganizationName, string Password);
+
+public static class OrganizationEndpoints
+{
+    public static async Task<IResult> DeleteAsync(HttpContext ctx,string id,[FromBody] DeleteOrganizationRequest request,SellerFinanceDbContext db,UserManager<AppUser> users,SignInManager<AppUser> signIn,CancellationToken ct)
+    {
+        if(ctx.Membership().Role!=OrganizationRole.Owner||id!=ctx.Tenant())return Results.Forbid();var userId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!;var user=await users.FindByIdAsync(userId);if(user is null)return Results.NotFound();if(!await users.CheckPasswordAsync(user,request.Password))return Results.Problem("Неверный пароль",statusCode:401);
+        var result=await OrganizationDeletion.DeleteAsync(db,id,userId,ctx.Membership(),request.OrganizationName,ct);if(result.Failure==OrganizationDeletionFailure.NotFound)return Results.NotFound();if(result.Failure==OrganizationDeletionFailure.Forbidden)return Results.Forbid();if(result.Failure==OrganizationDeletionFailure.ConfirmationMismatch)return Results.BadRequest(new{title="Название организации не совпадает"});if(result.Failure==OrganizationDeletionFailure.ActiveSync)return Results.Conflict(new{title="Дождитесь завершения синхронизации Kaspi"});await signIn.SignOutAsync();return Results.Ok(new{deleted=true,result.UserDeleted,result.DeletedOrders,result.DeletedProducts});
+    }
+}
 
 public static class OrganizationDeletion
 {
