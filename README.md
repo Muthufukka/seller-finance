@@ -80,6 +80,8 @@ Production probes:
 
 ## Production
 
+Production API documentation is available at `/api-docs`; the machine-readable contract is `/openapi/v1.json`. Business endpoints use the secure HttpOnly cookie session and resolve the tenant from authenticated organization membership.
+
 Render собирает React и API одним Dockerfile. Подробные процедуры находятся в [production runbook](docs/production-runbook.md), архитектура и ERD — в [architecture](docs/architecture.md).
 
 Перед реальными данными продавцов необходимо использовать долгоживущую БД в Казахстане, пройти правовую проверку и заменить ранее раскрытые credentials.

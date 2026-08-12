@@ -12,6 +12,8 @@
 
 ## Production smoke
 
+The smoke script validates `/api-docs` and `/openapi/v1.json`, checks critical paths in the contract, and rejects known secret/configuration names in the published JSON.
+
 После успешного Render deploy:
 
 ```powershell

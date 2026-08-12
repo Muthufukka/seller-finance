@@ -13,6 +13,8 @@ services:
         value: http://0.0.0.0:10000
       - key: PUBLIC_BASE_URL
         value: https://seller-finance.onrender.com
+      - key: ENABLE_OPENAPI
+        value: "true"
       - key: TOKEN_ENCRYPTION_KEY
         generateValue: true
       - key: TELEGRAM_WEBHOOK_SECRET

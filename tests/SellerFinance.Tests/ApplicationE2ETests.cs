@@ -57,6 +57,7 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/database")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/ready")).StatusCode);
+        var docs=await client.GetStringAsync("/api-docs");Assert.Contains("/openapi/v1.json",docs);var openApi=await client.GetFromJsonAsync<JsonElement>("/openapi/v1.json");Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/products",out _));Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/exports",out _));
         Assert.Equal(HttpStatusCode.Unauthorized,(await client.GetAsync("/api/v1/session")).StatusCode);
     }
 
@@ -86,10 +87,10 @@ public sealed class SellerFinanceApplicationFactory : WebApplicationFactory<Prog
     private readonly string databaseName=$"seller-finance-e2e-{Guid.NewGuid():N}";
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","false");
+        builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","false");builder.UseSetting("ENABLE_OPENAPI","true");
         builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>
         {
-            ["TEST_USE_INMEMORY"]="true",["TOKEN_ENCRYPTION_KEY"]=Convert.ToBase64String(new byte[32]),["EMAIL_CONFIRMATION_REQUIRED"]="false"
+            ["TEST_USE_INMEMORY"]="true",["TOKEN_ENCRYPTION_KEY"]=Convert.ToBase64String(new byte[32]),["EMAIL_CONFIRMATION_REQUIRED"]="false",["ENABLE_OPENAPI"]="true"
         }));
         builder.ConfigureServices(services=>
         {

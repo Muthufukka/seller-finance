@@ -68,7 +68,13 @@ app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Dat
     ? Results.Ok(new { status="healthy", provider=db.Database.ProviderName })
     : Results.Problem("Database connection failed", statusCode:503));
 app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])?Results.Ok(new{status="ready",database="healthy",encryption="configured"}):Results.Problem("Service is not ready",statusCode:503));
-if(app.Environment.IsDevelopment()||builder.Configuration.GetValue<bool>("ENABLE_OPENAPI"))app.MapOpenApi();
+if(app.Environment.IsDevelopment()||builder.Configuration.GetValue<bool>("ENABLE_OPENAPI"))
+{
+    app.MapOpenApi();
+    app.MapGet("/api-docs",()=>Results.Content("""
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Seller Finance API</title></head><body><main><h1>Seller Finance API v1</h1><p>Актуальный машиночитаемый контракт: <a href="/openapi/v1.json">OpenAPI JSON</a>.</p><p>Business API использует защищённую HttpOnly cookie-сессию. Организация определяется только по membership авторизованного пользователя.</p><h2>Основные группы</h2><ul><li>Auth и session: /api/v1/auth, /api/v1/session</li><li>Организации и роли: /api/v1/organizations</li><li>Kaspi: /api/v1/kaspi</li><li>Товары и себестоимость: /api/v1/products, /api/v1/costs</li><li>Заказы и финансы: /api/v1/orders, /api/v1/expenses, /api/v1/fee-rules</li><li>Аналитика и экспорт: /api/v1/analytics, /api/v1/exports</li></ul><p><a href="/">Вернуться в Seller Finance</a></p></main></body></html>
+""","text/html; charset=utf-8"));
+}
 app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDbContext db)=>{var hash=TokenTools.Hash(token);var job=await db.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.DownloadTokenHash==hash&&x.Status==ExportJobStatus.Succeeded&&x.ExpiresAt>DateTimeOffset.UtcNow&&x.FileContent!=null);return job is null?Results.NotFound():Results.File(job.FileContent!,job.ContentType!,job.FileName);}).RequireRateLimiting("sensitive");
 app.MapPost("/api/v1/telegram/webhook",async(HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{var secret=context.Request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 

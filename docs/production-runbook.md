@@ -4,6 +4,8 @@
 
 ## Deploy
 
+Public API documentation: `/api-docs`. Machine-readable OpenAPI contract: `/openapi/v1.json`. After every deploy verify critical routes and confirm that the contract contains no secrets or connection strings.
+
 1. Убедиться, что CI-тесты и frontend build успешны.
 2. Проверить обязательные Render secrets: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`.
 3. Выполнить deploy неизменяемого Git commit.
