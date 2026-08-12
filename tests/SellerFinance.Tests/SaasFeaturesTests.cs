@@ -4,6 +4,8 @@ using System.Text.Json;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using SellerFinance.Api;
 
 namespace SellerFinance.Tests;
@@ -41,7 +43,45 @@ public sealed class SaasFeaturesTests
         var connection=await db.TelegramConnections.SingleAsync();Assert.Equal("Active",connection.Status);Assert.Equal(12345,connection.ChatId);
     }
 
+    [Fact]
+    public void Telegram_Webhook_Secret_Is_Validated_From_Supplied_Value()
+    {
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_WEBHOOK_SECRET","expected-secret"}}).Build();Assert.True(TelegramWebhook.ValidSecret("expected-secret",config));Assert.False(TelegramWebhook.ValidSecret("wrong-secret",config));Assert.False(TelegramWebhook.ValidSecret("",config));
+    }
+
+    [Fact]
+    public async Task Notification_Queue_Deduplicates_And_Worker_Delivers()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationRules.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,Enabled=true});await db.SaveChangesAsync();}
+        var dispatcher=new NotificationDispatcher(provider.GetRequiredService<IServiceScopeFactory>());Assert.True(await dispatcher.QueueAsync("org",NotificationEventType.MissingCost,"No cost",2,"missing:day",CancellationToken.None));Assert.False(await dispatcher.QueueAsync("org",NotificationEventType.MissingCost,"Duplicate",2,"missing:day",CancellationToken.None));
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var worker=new NotificationDeliveryWorker(provider.GetRequiredService<IServiceScopeFactory>(),new TelegramClient(new HttpClient(new OkHandler()),config),NullLogger<NotificationDeliveryWorker>.Instance);await worker.ProcessOneAsync(CancellationToken.None);
+        await using var verify=provider.CreateAsyncScope();var delivery=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().NotificationDeliveries.SingleAsync();Assert.Equal(NotificationDeliveryStatus.Sent,delivery.Status);Assert.Equal(1,delivery.Attempt);
+    }
+
+    [Theory]
+    [InlineData(-0.1,true)]
+    [InlineData(0,false)]
+    [InlineData(2,false)]
+    public void Negative_Margin_Threshold_Uses_Less_Than(decimal margin,bool expected)=>Assert.Equal(expected,NotificationDispatcher.MatchesThreshold(NotificationEventType.NegativeMargin,margin,0));
+
+    [Fact]
+    public async Task Successful_Sync_Queues_Missing_Cost_And_Negative_Margin_Digests()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using var scope=provider.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationRules.AddRange(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,Enabled=true},new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.NegativeMargin,Enabled=true,Threshold=0});db.Products.AddRange(new(){Id="missing",OrganizationId="org",Sku="M",Name="Missing"},new(){Id="loss",OrganizationId="org",Sku="L",Name="Loss"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="loss",CostAmount=2000,EffectiveFrom=new(2026,8,1),CreatedByUserId="user"});db.Orders.Add(new(){Id="o",ExternalId="o",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="o",ProductId="missing",Revenue=1000,Quantity=1},new(){Id=Guid.NewGuid(),OrderId="o",ProductId="loss",Revenue=1000,Quantity=1}]});await db.SaveChangesAsync();
+        await KaspiSyncWorker.QueueFinancialAlertsAsync(db,new NotificationDispatcher(provider.GetRequiredService<IServiceScopeFactory>()),"org","https://example.test",CancellationToken.None);
+        var types=await db.NotificationDeliveries.Select(x=>x.EventType).ToArrayAsync();Assert.Contains(NotificationEventType.MissingCost,types);Assert.Contains(NotificationEventType.NegativeMargin,types);
+    }
+
+    [Fact]
+    public async Task Notification_Worker_Schedules_Retry_When_Telegram_Rejects()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationDeliveries.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,DeduplicationKey="retry",Message="Safe message"});await db.SaveChangesAsync();}
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var worker=new NotificationDeliveryWorker(provider.GetRequiredService<IServiceScopeFactory>(),new TelegramClient(new HttpClient(new StatusHandler(HttpStatusCode.InternalServerError)),config),NullLogger<NotificationDeliveryWorker>.Instance);await worker.ProcessOneAsync(CancellationToken.None);
+        await using var verify=provider.CreateAsyncScope();var delivery=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().NotificationDeliveries.SingleAsync();Assert.Equal(NotificationDeliveryStatus.RetryScheduled,delivery.Status);Assert.Equal("TELEGRAM_REJECTED",delivery.ErrorCode);Assert.True(delivery.NextAttemptAt>DateTimeOffset.UtcNow);
+    }
+
     private static ExportJobEntity Job(string format,string report)=>new(){Id=Guid.NewGuid(),OrganizationId="org",CreatedByUserId="user",Format=format,ReportType=report,DownloadTokenHash="hash"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     private sealed class OkHandler:HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));}
+    private sealed class StatusHandler(HttpStatusCode status):HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(status));}
 }

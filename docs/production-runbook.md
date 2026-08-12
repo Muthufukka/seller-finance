@@ -55,7 +55,9 @@ Kaspi tokens зашифрованы `TOKEN_ENCRYPTION_KEY`. Нельзя про�
 
 ## Telegram
 
-Webhook URL: `https://<domain>/api/v1/telegram/webhook/<TELEGRAM_WEBHOOK_SECRET>`. Bot token хранится только в Render. При компрометации token отозвать его через BotFather, заменить secret и заново установить webhook.
+Webhook URL: `https://<domain>/api/v1/telegram/webhook`. При регистрации webhook передать `TELEGRAM_WEBHOOK_SECRET` параметром `secret_token`; Telegram затем присылает его в заголовке `X-Telegram-Bot-Api-Secret-Token`. Не помещать secret в URL. Bot token хранится только в Render. При компрометации token отозвать его через BotFather, заменить secret и заново установить webhook.
+
+Событийные сообщения сначала сохраняются в durable queue. Повторные события дедуплицируются, ошибки Telegram повторяются с backoff до пяти попыток, а итоговый статус доступен через `GET /api/v1/telegram`.
 
 ## Retention
 

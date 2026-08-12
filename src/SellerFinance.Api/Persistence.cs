@@ -27,6 +27,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<ExportJobEntity> ExportJobs => Set<ExportJobEntity>();
     public DbSet<TelegramConnectionEntity> TelegramConnections => Set<TelegramConnectionEntity>();
     public DbSet<NotificationRuleEntity> NotificationRules => Set<NotificationRuleEntity>();
+    public DbSet<NotificationDeliveryEntity> NotificationDeliveries => Set<NotificationDeliveryEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -80,12 +81,17 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<NotificationRuleEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<NotificationRuleEntity>().Property(x => x.Threshold).HasPrecision(19,4);
         modelBuilder.Entity<NotificationRuleEntity>().HasIndex(x => new { x.OrganizationId, x.EventType }).IsUnique();
+        modelBuilder.Entity<NotificationDeliveryEntity>().HasKey(x=>x.Id);
+        modelBuilder.Entity<NotificationDeliveryEntity>().Property(x=>x.Value).HasPrecision(19,4);
+        modelBuilder.Entity<NotificationDeliveryEntity>().HasIndex(x=>new{x.OrganizationId,x.DeduplicationKey}).IsUnique();
+        modelBuilder.Entity<NotificationDeliveryEntity>().HasIndex(x=>new{x.Status,x.NextAttemptAt});
     }
 }
 
 public enum ExportJobStatus { Queued, Running, Succeeded, Failed, Expired }
 public enum SubscriptionPlan { Trial, Start, Pro, Business }
 public enum NotificationEventType { MissingCost, NegativeMargin, SyncRequiresAttention }
+public enum NotificationDeliveryStatus { Queued, Sending, Sent, RetryScheduled, Failed, Suppressed }
 
 public sealed class ExportJobEntity
 {
@@ -128,6 +134,22 @@ public sealed class NotificationRuleEntity
     public bool Enabled { get; set; } = true;
     public decimal? Threshold { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class NotificationDeliveryEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public NotificationEventType EventType { get; set; }
+    public string DeduplicationKey { get; set; } = "";
+    public string Message { get; set; } = "";
+    public decimal? Value { get; set; }
+    public NotificationDeliveryStatus Status { get; set; } = NotificationDeliveryStatus.Queued;
+    public int Attempt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? SentAt { get; set; }
+    public string? ErrorCode { get; set; }
 }
 
 public enum FeeRuleScope { Default, Category, Product }
@@ -390,7 +412,7 @@ public static class DatabaseSeed
     public static async Task InitializeAsync(SellerFinanceDbContext db)
     {
         await db.Database.MigrateAsync();
-        if (await db.Organizations.AnyAsync()) return;
+        if (await db.Organizations.AnyAsync()){await EnsureNotificationRulesAsync(db);return;}
 
         db.Organizations.Add(new() { Id = DemoTenantId, Name = "Aspan Market" });
         db.Products.AddRange(
@@ -406,6 +428,12 @@ public static class DatabaseSeed
             ToEntity("KSP-10543", new(2026,8,10), "p1",37485m,3,7200m,null,.109m,800m),
             ToEntity("KSP-10561", new(2026,8,11), "p2",36980m,2,8900m,null,.109m,650m));
         await db.SaveChangesAsync();
+        await EnsureNotificationRulesAsync(db);
+    }
+
+    private static async Task EnsureNotificationRulesAsync(SellerFinanceDbContext db)
+    {
+        var organizations=await db.Organizations.Select(x=>x.Id).ToArrayAsync();var existing=await db.NotificationRules.Select(x=>new{x.OrganizationId,x.EventType}).ToArrayAsync();foreach(var organizationId in organizations)foreach(var type in Enum.GetValues<NotificationEventType>())if(!existing.Any(x=>x.OrganizationId==organizationId&&x.EventType==type))db.NotificationRules.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,EventType=type,Enabled=true,Threshold=type==NotificationEventType.NegativeMargin?0m:null});try{await db.SaveChangesAsync();}catch(DbUpdateException ex)when(ex.InnerException is PostgresException{SqlState:PostgresErrorCodes.UniqueViolation}){db.ChangeTracker.Clear();}
     }
 
     private static OrderEntity ToEntity(string id, DateOnly date, string productId, decimal revenue, int quantity,

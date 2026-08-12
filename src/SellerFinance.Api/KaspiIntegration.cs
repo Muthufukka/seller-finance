@@ -101,9 +101,16 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
             else {job.Status=SyncJobStatus.RequiresAttention;job.CompletedAt=DateTimeOffset.UtcNow;connection.Status=MarketplaceConnectionStatus.RequiresAttention;connection.LastErrorCode=result.ErrorCode;}
         }
         await db.SaveChangesAsync(ct);
-        var notifications=scope.ServiceProvider.GetRequiredService<NotificationDispatcher>();
-        if(job.Status==SyncJobStatus.RequiresAttention)await notifications.DispatchAsync(job.OrganizationId,NotificationEventType.SyncRequiresAttention,"Seller Finance: синхронизация Kaspi требует внимания.",null,ct);
-        else if(job.Status==SyncJobStatus.Succeeded&&await db.OrderLines.AnyAsync(x=>db.Orders.Any(o=>o.Id==x.OrderId&&o.OrganizationId==job.OrganizationId)&&x.UnitCost==null,ct))await notifications.DispatchAsync(job.OrganizationId,NotificationEventType.MissingCost,"Seller Finance: после синхронизации найдены товары без себестоимости.",null,ct);
+        var notifications=scope.ServiceProvider.GetRequiredService<NotificationDispatcher>();var baseUrl=(scope.ServiceProvider.GetRequiredService<IConfiguration>()["PUBLIC_BASE_URL"]??"https://seller-finance.onrender.com").TrimEnd('/');
+        if(job.Status==SyncJobStatus.RequiresAttention)await notifications.QueueAsync(job.OrganizationId,NotificationEventType.SyncRequiresAttention,$"Seller Finance: синхронизация Kaspi требует внимания. Открыть: {baseUrl}",null,$"sync:{job.Id}",ct);
+        else if(job.Status==SyncJobStatus.Succeeded)await QueueFinancialAlertsAsync(db,notifications,job.OrganizationId,baseUrl,ct);
+    }
+
+    public static async Task QueueFinancialAlertsAsync(SellerFinanceDbContext db,NotificationDispatcher notifications,string organizationId,string baseUrl,CancellationToken ct)
+    {
+        var products=await DbAnalytics.ProductsAsync(db,organizationId);var json=products.Select(x=>JsonSerializer.SerializeToElement(x)).ToArray();var missing=json.Where(x=>x.GetProperty("revenue").GetDecimal()>0&&x.GetProperty("coveragePct").GetDecimal()<100m).ToArray();var bucket=DateTimeOffset.UtcNow.ToString("yyyyMMdd");
+        if(missing.Length>0)await notifications.QueueAsync(organizationId,NotificationEventType.MissingCost,$"Seller Finance: у {missing.Length} товар(ов) новые продажи без полной себестоимости. Открыть: {baseUrl}",missing.Length,$"missing-cost:{bucket}",ct);
+        var negative=json.Where(x=>x.TryGetProperty("margin",out var margin)&&margin.ValueKind==JsonValueKind.Number&&margin.GetDecimal()<0m).OrderBy(x=>x.GetProperty("margin").GetDecimal()).ToArray();if(negative.Length>0){var worst=negative[0].GetProperty("margin").GetDecimal();await notifications.QueueAsync(organizationId,NotificationEventType.NegativeMargin,$"Seller Finance: отрицательная маржа у {negative.Length} товар(ов), минимум {worst:0.0}%. Открыть: {baseUrl}",worst,$"negative-margin:{bucket}",ct);}
     }
 
     private static OrderStatus MapStatus(string value)=>value.ToUpperInvariant() switch { "COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED"=>OrderStatus.Cancelled,_=>OrderStatus.Pending };
