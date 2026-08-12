@@ -18,6 +18,9 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
     public DbSet<MarketplaceConnectionEntity> MarketplaceConnections => Set<MarketplaceConnectionEntity>();
     public DbSet<SyncJobEntity> SyncJobs => Set<SyncJobEntity>();
+    public DbSet<ProductCostHistoryEntity> ProductCostHistory => Set<ProductCostHistoryEntity>();
+    public DbSet<CostImportJobEntity> CostImportJobs => Set<CostImportJobEntity>();
+    public DbSet<CostImportRowEntity> CostImportRows => Set<CostImportRowEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -45,7 +48,62 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<MarketplaceConnectionEntity>().HasIndex(x => new { x.OrganizationId, x.Provider }).IsUnique();
         modelBuilder.Entity<SyncJobEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<SyncJobEntity>().HasIndex(x => new { x.Status, x.NextAttemptAt });
+        modelBuilder.Entity<ProductCostHistoryEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<ProductCostHistoryEntity>().Property(x => x.CostAmount).HasPrecision(19,4);
+        modelBuilder.Entity<ProductCostHistoryEntity>().HasIndex(x => new { x.OrganizationId, x.ProductId, x.EffectiveFrom }).IsUnique();
+        modelBuilder.Entity<CostImportJobEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<CostImportRowEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<CostImportRowEntity>().Property(x => x.CostAmount).HasPrecision(19,4);
+        modelBuilder.Entity<CostImportRowEntity>().HasIndex(x => new { x.ImportJobId, x.RowNumber });
     }
+}
+
+public enum CostSource { Manual, CsvImport, XlsxImport, Legacy }
+public enum CostImportStatus { Preview, Applied, Rejected, Expired }
+
+public sealed class ProductCostHistoryEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string ProductId { get; set; } = "";
+    public decimal CostAmount { get; set; }
+    public DateOnly EffectiveFrom { get; set; }
+    public CostSource Source { get; set; }
+    public Guid? ImportJobId { get; set; }
+    public string CreatedByUserId { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class CostImportJobEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string CreatedByUserId { get; set; } = "";
+    public string FileNameSafe { get; set; } = "";
+    public CostSource Source { get; set; }
+    public CostImportStatus Status { get; set; } = CostImportStatus.Preview;
+    public int TotalRows { get; set; }
+    public int MatchedRows { get; set; }
+    public int UnmatchedRows { get; set; }
+    public int ErrorRows { get; set; }
+    public int DuplicateRows { get; set; }
+    public int ExpectedChanges { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddHours(24);
+    public DateTimeOffset? AppliedAt { get; set; }
+}
+
+public sealed class CostImportRowEntity
+{
+    public Guid Id { get; set; }
+    public Guid ImportJobId { get; set; }
+    public int RowNumber { get; set; }
+    public string Sku { get; set; } = "";
+    public string? ProductId { get; set; }
+    public decimal? CostAmount { get; set; }
+    public DateOnly? EffectiveFrom { get; set; }
+    public string Status { get; set; } = "Valid";
+    public string? Error { get; set; }
 }
 
 public enum MarketplaceConnectionStatus { PendingVerification, Active, RequiresAttention, Disabled }
@@ -150,6 +208,8 @@ public sealed class OrderEntity
     public string ExternalId { get; set; } = "";
     public OrderStatus Status { get; set; }
     public DateOnly Date { get; set; }
+    public DateOnly? CompletionDate { get; set; }
+    public bool CalculationDateFallback { get; set; }
     public List<OrderLineEntity> Lines { get; set; } = [];
 }
 
@@ -227,7 +287,7 @@ public static class DatabaseSeed
     private static OrderEntity ToEntity(string id, DateOnly date, string productId, decimal revenue, int quantity,
         decimal? cost, decimal? actualFee, decimal feeRate, decimal delivery) => new()
         {
-            Id=id, ExternalId=id, OrganizationId=DemoTenantId, Status=OrderStatus.Completed, Date=date,
+            Id=id, ExternalId=id, OrganizationId=DemoTenantId, Status=OrderStatus.Completed, Date=date, CompletionDate=date,
             Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, UnitCost=cost, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
         };
 }
@@ -245,12 +305,16 @@ public static class DbAnalytics
         (await FactsAsync(db, tenant)).Where(x=>x.Status==OrderStatus.Completed).GroupBy(x=>x.Date)
             .Select(g=>{var f=FinanceCalculator.Calculate(g); return (object)new { date=g.Key, revenue=f.Revenue, profit=f.OperatingProfit };}).ToArray();
 
-    public static async Task<object[]> OrdersAsync(SellerFinanceDbContext db, string tenant) =>
-        (await FactsAsync(db, tenant)).Select(x=>(object)new { id=x.Id, date=x.Date, status=x.Status.ToString().ToUpperInvariant(), amount=x.Lines.Sum(y=>y.Revenue), items=x.Lines.Sum(y=>y.Quantity), complete=x.Lines.All(y=>y.UnitCost.HasValue) }).ToArray();
+    public static async Task<object[]> OrdersAsync(SellerFinanceDbContext db, string tenant)
+    {
+        var entities=await db.Orders.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
+        return (await FactsAsync(db,tenant)).Select(x=>(object)new { id=x.Id, date=x.Date, status=x.Status.ToString().ToUpperInvariant(), amount=x.Lines.Sum(y=>y.Revenue), items=x.Lines.Sum(y=>y.Quantity), complete=x.Lines.All(y=>y.UnitCost.HasValue), calculationDateFallback=entities[x.Id].CalculationDateFallback }).ToArray();
+    }
 
     public static async Task<object[]> ProductsAsync(SellerFinanceDbContext db, string tenant)
     {
         var products = await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();
+        var histories = await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();
         var facts = await FactsAsync(db, tenant);
         var lines = facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).ToArray();
         return products.Select(p=>
@@ -262,13 +326,15 @@ public static class DbAnalytics
             var costs=own.Sum(x=>(x.ActualFee ?? Decimal.Round(x.Revenue*x.FeeRate,4))+x.Delivery+x.OtherVariableCosts);
             var profit=cogs.HasValue ? revenue-cogs.Value-costs : (decimal?)null;
             var margin=profit.HasValue&&revenue!=0 ? Decimal.Round(profit.Value/revenue*100m,1) : (decimal?)null;
-            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=p.CurrentCost, status=p.CurrentCost.HasValue?"profitable":"missing-cost" };
+            var current=histories.Where(x=>x.ProductId==p.Id&&x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow)).OrderByDescending(x=>x.EffectiveFrom).FirstOrDefault()?.CostAmount;
+            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=current.HasValue?"profitable":"missing-cost" };
         }).ToArray();
     }
 
     private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant)
     {
         var orders=await db.Orders.AsNoTracking().Include(x=>x.Lines).Where(x=>x.OrganizationId==tenant).ToArrayAsync();
-        return orders.Select(x=>new OrderFact(x.Id,x.OrganizationId,x.Status,x.Date,x.Lines.Select(y=>new OrderLine(y.ProductId,y.Revenue,y.Quantity,y.UnitCost,y.ActualFee,y.FeeRate,y.Delivery,y.OtherVariableCosts)).ToArray())).ToArray();
+        var costs=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==tenant).OrderByDescending(x=>x.EffectiveFrom).ToArrayAsync();
+        return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,x.Lines.Select(y=>new OrderLine(y.ProductId,y.Revenue,y.Quantity,costs.FirstOrDefault(c=>c.ProductId==y.ProductId&&c.EffectiveFrom<=calculationDate)?.CostAmount??y.UnitCost,y.ActualFee,y.FeeRate,y.Delivery,y.OtherVariableCosts)).ToArray());}).ToArray();
     }
 }

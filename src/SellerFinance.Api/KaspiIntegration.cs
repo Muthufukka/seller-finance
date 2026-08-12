@@ -92,7 +92,7 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
             {
                 var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.OrganizationId==job.OrganizationId&&x.ExternalId==source.Id,ct);
                 if(order is null) { order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=job.OrganizationId,ExternalId=source.Id}; db.Orders.Add(order); }
-                order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime); order.Status=MapStatus(source.Status);
+                order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime); order.Status=MapStatus(source.Status);order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
                 if(order.Lines.Count==0) order.Lines.Add(new(){Id=Guid.NewGuid(),OrderId=order.Id,ProductId="kaspi-unmapped",Revenue=source.TotalPrice,Quantity=1}); else order.Lines[0].Revenue=source.TotalPrice;
             }
             job.Status=SyncJobStatus.Succeeded; job.CompletedAt=DateTimeOffset.UtcNow; job.ImportedOrders=result.Orders.Count; connection.Status=MarketplaceConnectionStatus.Active; connection.LastSuccessfulSyncAt=DateTimeOffset.UtcNow; connection.LastErrorCode=null;

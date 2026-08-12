@@ -34,6 +34,7 @@ builder.Services.AddHttpClient<KaspiClient>(client =>
     client.Timeout=TimeSpan.FromSeconds(30);
 });
 builder.Services.AddHostedService<KaspiSyncWorker>();
+builder.Services.AddScoped<CostImportService>();
 
 var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
@@ -187,10 +188,31 @@ api.MapPost("/products/{id}/costs", async (HttpContext ctx,string id,ProductCost
     if(request.Cost<=0) return Results.BadRequest(new { title="Себестоимость должна быть больше нуля" });
     var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());
     if(product is null) return Results.NotFound();
-    product.CurrentCost=request.Cost;
+    var effective=request.EffectiveFrom??DateOnly.FromDateTime(DateTime.UtcNow);
+    if(await db.ProductCostHistory.AnyAsync(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id&&x.EffectiveFrom==effective))return Results.Conflict(new {title="Себестоимость на эту дату уже существует"});
+    db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),ProductId=id,CostAmount=request.Cost,EffectiveFrom=effective,Source=CostSource.Manual,CreatedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!});
     AuditWriter.Add(db,ctx,"product.cost.changed","Product",id);
     await db.SaveChangesAsync();
-    return Results.Ok(new { productId=id,cost=request.Cost });
+    return Results.Ok(new { productId=id,cost=request.Cost,effectiveFrom=effective });
+});
+api.MapGet("/products/{id}",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>
+{
+    var product=await db.Products.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());if(product is null)return Results.NotFound();
+    var history=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync();
+    return Results.Ok(new{product.Id,product.Sku,product.Name,currentCost=history.FirstOrDefault(x=>x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow))?.CostAmount,costHistory=history});
+});
+api.MapGet("/products/{id}/costs",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>Results.Ok(await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync()));
+api.MapPost("/costs/imports/preview",async(HttpContext ctx,IFormFile file,CostImportService imports,SellerFinanceDbContext db,CancellationToken ct)=>
+{
+    if(!ctx.Membership().CanWrite())return Results.Forbid();
+    try{var job=await imports.PreviewAsync(ctx.Tenant(),ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!,file,ct);var rows=await db.CostImportRows.AsNoTracking().Where(x=>x.ImportJobId==job.Id).OrderBy(x=>x.RowNumber).Take(200).ToArrayAsync(ct);AuditWriter.Add(db,ctx,"product.cost.import.previewed","CostImportJob",job.Id.ToString());await db.SaveChangesAsync(ct);return Results.Ok(CostImportService.ToPreview(job,rows));}
+    catch(CostImportException ex){return Results.BadRequest(new{title=ex.Message});}
+}).DisableAntiforgery();
+api.MapGet("/costs/imports/{id:guid}",async(HttpContext ctx,Guid id,SellerFinanceDbContext db)=>{var job=await db.CostImportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());if(job is null)return Results.NotFound();var rows=await db.CostImportRows.AsNoTracking().Where(x=>x.ImportJobId==id).OrderBy(x=>x.RowNumber).Take(200).ToArrayAsync();return Results.Ok(CostImportService.ToPreview(job,rows));});
+api.MapPost("/costs/imports/{id:guid}/confirm",async(HttpContext ctx,Guid id,CostImportService imports,SellerFinanceDbContext db,CancellationToken ct)=>{if(!ctx.Membership().CanWrite())return Results.Forbid();try{var applied=await imports.ConfirmAsync(id,ctx.Tenant(),ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!,ct);AuditWriter.Add(db,ctx,"product.cost.import.applied","CostImportJob",id.ToString(),$"{{\"appliedRows\":{applied}}}");await db.SaveChangesAsync(ct);return Results.Ok(new{appliedRows=applied});}catch(KeyNotFoundException){return Results.NotFound();}catch(CostImportException ex){return Results.Conflict(new{title=ex.Message});}});
+api.MapGet("/costs/imports/template.xlsx",(HttpContext ctx)=>
+{
+    using var workbook=new ClosedXML.Excel.XLWorkbook();var sheet=workbook.AddWorksheet("Себестоимость");sheet.Cell("A1").Value="SKU";sheet.Cell("B1").Value="Cost";sheet.Cell("C1").Value="EffectiveFrom";sheet.Cell("A2").Value="EXAMPLE-001";sheet.Cell("B2").Value=1250.50;sheet.Cell("C2").Value=new DateTime(2026,8,1);sheet.Range("A1:C1").Style.Font.Bold=true;sheet.Column(1).Width=22;sheet.Column(2).Width=16;sheet.Column(3).Width=18;sheet.Column(2).Style.NumberFormat.Format="#,##0.00";sheet.Column(3).Style.DateFormat.Format="yyyy-mm-dd";using var stream=new MemoryStream();workbook.SaveAs(stream);return Results.File(stream.ToArray(),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","seller-finance-cost-import-template.xlsx");
 });
 
 app.MapFallbackToFile("index.html");
