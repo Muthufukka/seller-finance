@@ -41,6 +41,15 @@ public sealed class ProductCostsTests
     }
 
     [Fact]
+    public async Task Complete_Cost_Filter_Excludes_Uncovered_Lines_Across_Analytics()
+    {
+        await using var db=CreateDb();db.Products.AddRange(new(){Id="covered",OrganizationId="org",Sku="C",Name="Covered"},new(){Id="missing",OrganizationId="org",Sku="M",Name="Missing"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="covered",CostAmount=400,EffectiveFrom=new(2026,1,1),Source=CostSource.Manual,CreatedByUserId="user"});db.Orders.Add(new(){Id="mixed",ExternalId="mixed",OrganizationId="org",Status=OrderStatus.Completed,Date=new(2026,8,12),CompletionDate=new(2026,8,12),Lines=[new(){Id=Guid.NewGuid(),OrderId="mixed",ProductId="covered",Revenue=1000,Quantity=1},new(){Id=Guid.NewGuid(),OrderId="mixed",ProductId="missing",Revenue=2000,Quantity=1}]});await db.SaveChangesAsync();
+        var unfiltered=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org"));var filtered=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org",completeCostsOnly:true));
+        Assert.Equal(3000,unfiltered.GetProperty("Revenue").GetDecimal());Assert.True(unfiltered.GetProperty("IsPreliminary").GetBoolean());Assert.Equal(1000,filtered.GetProperty("Revenue").GetDecimal());Assert.Equal(400,filtered.GetProperty("Cogs").GetDecimal());Assert.Equal(100,filtered.GetProperty("CoveragePct").GetDecimal());Assert.False(filtered.GetProperty("IsPreliminary").GetBoolean());
+        var series=JsonSerializer.SerializeToElement(await DbAnalytics.TimeSeriesAsync(db,"org",completeCostsOnly:true));Assert.Equal(1000,series[0].GetProperty("revenue").GetDecimal());var abc=JsonSerializer.SerializeToElement(await DbAnalytics.AbcAsync(db,"org",completeCostsOnly:true));Assert.Single(abc.EnumerateArray());Assert.Equal("covered",abc[0].GetProperty("productId").GetString());
+    }
+
+    [Fact]
     public async Task Csv_Import_Previews_Then_Confirms_Only_Valid_Rows()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});await db.SaveChangesAsync();

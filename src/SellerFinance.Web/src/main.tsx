@@ -143,7 +143,8 @@ function App() {
     [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState("30"),
     [customFrom, setCustomFrom] = useState(""),
-    [customTo, setCustomTo] = useState("");
+    [customTo, setCustomTo] = useState(""),
+    [completeCostsOnly, setCompleteCostsOnly] = useState(false);
   const [session, setSession] = useState<Session | null>(null),
     [authReady, setAuthReady] = useState(false);
   const [summary, setSummary] = useState(fallback.summary),
@@ -160,7 +161,7 @@ function App() {
     const headers = { "X-Organization-Id": session.organizationId };
     const range = periodRange(period, customFrom, customTo);
     if (!range) return;
-    const query = `?dateFrom=${range.from}&dateTo=${range.to}`;
+    const query = `?dateFrom=${range.from}&dateTo=${range.to}&completeCostsOnly=${completeCostsOnly}`;
     setLoading(true);
     Promise.all([fetch("/api/v1/analytics/summary" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/products" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/timeseries" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/orders", { headers }).then((r) => (r.ok ? r.json() : Promise.reject()))])
       .then(([s, p, t, o]) => {
@@ -171,9 +172,10 @@ function App() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [session, period, customFrom, customTo]);
+  }, [session, period, customFrom, customTo, completeCostsOnly]);
   if (!authReady) return <div className="auth-loading">Seller Finance</div>;
   if (!session) return <AuthScreen onAuthenticated={setSession} />;
+  const activeRange = periodRange(period, customFrom, customTo);
   const navigate = (p: Page) => {
     setPage(p);
     setMenu(false);
@@ -210,10 +212,10 @@ function App() {
             </button>
           </div>
         </header>
-        {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />}
+        {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} />}
         {page === "products" && <Products products={products} session={session} />}
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} />}
-        {page === "abc" && <Abc session={session} />}
+        {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "integrations" && <KaspiConnections session={session} />}
         {page === "expenses" && <Expenses session={session} products={products} />}
         {page === "fees" && <Fees session={session} products={products} />}
@@ -456,8 +458,8 @@ function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: bo
   );
 }
 
-function Dashboard({ summary, products, points, loading, period, onPeriod, customFrom, customTo, onCustomFrom, onCustomTo }: { summary: Summary; products: Product[]; points: Point[]; loading: boolean; period: string; onPeriod: (value: string) => void; customFrom: string; customTo: string; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void }) {
-  const max = Math.max(...points.map((x) => x.revenue));
+function Dashboard({ summary, products, points, loading, period, onPeriod, customFrom, customTo, onCustomFrom, onCustomTo, completeCostsOnly, onCompleteCostsOnly }: { summary: Summary; products: Product[]; points: Point[]; loading: boolean; period: string; onPeriod: (value: string) => void; customFrom: string; customTo: string; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void; completeCostsOnly: boolean; onCompleteCostsOnly: (value: boolean) => void }) {
+  const max = Math.max(1, ...points.map((x) => x.revenue));
   const problems = products.filter((x) => x.cost === null);
   return (
     <section className="content">
@@ -496,6 +498,10 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
             <input aria-label="Конец периода" type="date" min={customFrom} value={customTo} onChange={(e) => onCustomTo(e.target.value)} />
           </div>
         )}
+        <label className="complete-cost-filter">
+          <input type="checkbox" checked={completeCostsOnly} onChange={(event) => onCompleteCostsOnly(event.target.checked)} />
+          Только продажи с полной себестоимостью
+        </label>
         <span className="sync">
           <i /> Данные загружены из PostgreSQL
         </span>
@@ -1015,16 +1021,19 @@ function Integrations({ session }: { session: Session }) {
   );
 }
 
-function Abc({ session }: { session: Session }) {
+function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Session; completeCostsOnly: boolean; dateFrom?: string; dateTo?: string }) {
   const [metric, setMetric] = useState("profit"),
     [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
-    fetch(`/api/v1/analytics/abc?metric=${metric}`, {
+    const query = new URLSearchParams({ metric, completeCostsOnly: String(completeCostsOnly) });
+    if (dateFrom) query.set("dateFrom", dateFrom);
+    if (dateTo) query.set("dateTo", dateTo);
+    fetch(`/api/v1/analytics/abc?${query}`, {
       headers: { "X-Organization-Id": session.organizationId },
     })
       .then((r) => r.json())
       .then(setRows);
-  }, [metric]);
+  }, [metric, completeCostsOnly, dateFrom, dateTo]);
   return (
     <section className="content">
       <div className="title-row">
