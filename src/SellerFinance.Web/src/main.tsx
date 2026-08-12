@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BarChart3, Box, ChevronDown, CircleAlert, Download, LayoutDashboard, Menu, PackageSearch, RefreshCw, Search, Settings, ShoppingBag, Sparkles, TrendingDown, TrendingUp, WalletCards, X } from 'lucide-react'
+import { BarChart3, Box, ChevronDown, CircleAlert, Download, LayoutDashboard, LogIn, Menu, PackageSearch, RefreshCw, Search, Settings, ShoppingBag, Sparkles, TrendingDown, TrendingUp, WalletCards, X } from 'lucide-react'
 import './styles.css'
 
 type Summary = { revenue:number; orders:number; units:number; cogs:number|null; grossProfit:number; marketplaceFees:number; delivery:number; operatingProfit:number; operatingMarginPct:number|null; coveragePct:number; isPreliminary:boolean }
 type Product = { id:string; sku:string; name:string; units:number; revenue:number; cogs:number|null; profit:number|null; margin:number|null; cost:number|null; status:string }
 type Point = { date:string; revenue:number; profit:number }
 type Page = 'dashboard'|'products'|'orders'|'abc'
+type Session = { userId:string; email:string; displayName:string; organizationId:string; organizationName:string; role:string; plan:string }
 
 const fallback:{summary:Summary; products:Product[]; timeseries:Point[]} = {
   summary:{revenue:173835,orders:6,units:12,cogs:null,grossProfit:83835,marketplaceFees:17798,delivery:3850,operatingProfit:49687,operatingMarginPct:28.58,coveragePct:92.53,isPreliminary:true},
@@ -23,23 +24,33 @@ const pct=(v:number|null)=>v===null?'—':v.toFixed(1).replace('.',',')+'%'
 
 function App(){
   const [page,setPage]=useState<Page>('dashboard'), [menu,setMenu]=useState(false), [loading,setLoading]=useState(true)
+  const [session,setSession]=useState<Session|null>(null), [authReady,setAuthReady]=useState(false)
   const [summary,setSummary]=useState(fallback.summary), [products,setProducts]=useState(fallback.products), [points,setPoints]=useState(fallback.timeseries)
-  useEffect(()=>{ Promise.all([
-    fetch('/api/v1/analytics/summary',{headers:{'X-Organization-Id':'demo-organization'}}).then(r=>r.ok?r.json():Promise.reject()),
-    fetch('/api/v1/analytics/products',{headers:{'X-Organization-Id':'demo-organization'}}).then(r=>r.ok?r.json():Promise.reject()),
-    fetch('/api/v1/analytics/timeseries',{headers:{'X-Organization-Id':'demo-organization'}}).then(r=>r.ok?r.json():Promise.reject())
-  ]).then(([s,p,t])=>{setSummary(s);setProducts(p);setPoints(t)}).catch(()=>{}).finally(()=>setLoading(false)) },[])
+  useEffect(()=>{ fetch('/api/v1/session').then(async r=>r.ok?setSession(await r.json()):setSession(null)).finally(()=>setAuthReady(true)) },[])
+  useEffect(()=>{ if(!session)return; const headers={'X-Organization-Id':session.organizationId}; Promise.all([
+    fetch('/api/v1/analytics/summary',{headers}).then(r=>r.ok?r.json():Promise.reject()),
+    fetch('/api/v1/analytics/products',{headers}).then(r=>r.ok?r.json():Promise.reject()),
+    fetch('/api/v1/analytics/timeseries',{headers}).then(r=>r.ok?r.json():Promise.reject())
+  ]).then(([s,p,t])=>{setSummary(s);setProducts(p);setPoints(t)}).catch(()=>{}).finally(()=>setLoading(false)) },[session])
+  if(!authReady)return <div className="auth-loading">Seller Finance</div>
+  if(!session)return <AuthScreen onAuthenticated={setSession}/>
   const navigate=(p:Page)=>{setPage(p);setMenu(false)}
   return <div className="app">
     <Sidebar page={page} open={menu} onClose={()=>setMenu(false)} onNav={navigate}/>
     <main>
-      <header><button className="icon mobile" onClick={()=>setMenu(true)} aria-label="Открыть меню"><Menu/></button><div className="org"><span className="orgmark">A</span><div><b>Aspan Market</b><small>Организация</small></div><ChevronDown size={16}/></div><div className="head-actions"><button className="icon"><Search/></button><button className="avatar">АИ</button></div></header>
+      <header><button className="icon mobile" onClick={()=>setMenu(true)} aria-label="Открыть меню"><Menu/></button><div className="org"><span className="orgmark">{session.organizationName[0]}</span><div><b>{session.organizationName}</b><small>{session.role}</small></div><ChevronDown size={16}/></div><div className="head-actions"><button className="icon"><Search/></button><button className="avatar" title={`${session.email} — выйти`} onClick={async()=>{await fetch('/api/v1/auth/logout',{method:'POST'});setSession(null)}}>{(session.displayName||session.email).slice(0,2).toUpperCase()}</button></div></header>
       {page==='dashboard'&&<Dashboard summary={summary} products={products} points={points} loading={loading}/>} 
       {page==='products'&&<Products products={products}/>} 
       {page==='orders'&&<EmptyPage title="Заказы" text="Здесь появятся заказы после синхронизации Kaspi." icon={<ShoppingBag/>}/>} 
       {page==='abc'&&<EmptyPage title="ABC-анализ" text="Товары будут распределены по вкладу в операционную прибыль." icon={<BarChart3/>}/>} 
     </main>
   </div>
+}
+
+function AuthScreen({onAuthenticated}:{onAuthenticated:(session:Session)=>void}){
+ const [register,setRegister]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
+ const submit=async(e:React.FormEvent<HTMLFormElement>)=>{e.preventDefault();setBusy(true);setError('');const form=new FormData(e.currentTarget);const body=register?{email:form.get('email'),password:form.get('password'),displayName:form.get('displayName'),organizationName:form.get('organizationName')}:{email:form.get('email'),password:form.get('password')};try{const response=await fetch(`/api/v1/auth/${register?'register':'login'}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!response.ok){const data=await response.json().catch(()=>null);throw new Error(data?.message||data?.title||'Не удалось войти')}const sessionResponse=await fetch('/api/v1/session');if(!sessionResponse.ok)throw new Error('Сессия не создана');onAuthenticated(await sessionResponse.json())}catch(ex){setError(ex instanceof Error?ex.message:'Ошибка авторизации')}finally{setBusy(false)}}
+ return <div className="auth-page"><section className="auth-panel"><div className="auth-brand"><span><WalletCards/></span><div>Seller<b>Finance</b></div></div><h1>{register?'Создать аккаунт':'Войти'}</h1><p>{register?'Создайте защищённое рабочее пространство продавца.':'Управляйте прибылью и себестоимостью в одном месте.'}</p><form onSubmit={submit}>{register&&<><label>Ваше имя<input name="displayName" required autoComplete="name"/></label><label>Название организации<input name="organizationName" required/></label></>}<label>Email<input name="email" type="email" required autoComplete="email"/></label><label>Пароль<input name="password" type="password" minLength={8} required autoComplete={register?'new-password':'current-password'}/></label>{error&&<div className="auth-error">{error}</div>}<button className="primary" disabled={busy}><LogIn/>{busy?'Подождите…':register?'Зарегистрироваться':'Войти'}</button></form><button className="auth-switch" onClick={()=>{setRegister(!register);setError('')}}>{register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button></section><aside className="auth-hero"><span>Финансы маркетплейса без слепых зон</span><h2>Знайте реальную прибыль каждого заказа и товара.</h2><p>Себестоимость, комиссии, доставка и расходы — в едином расчёте.</p></aside></div>
 }
 
 function Sidebar({page,open,onClose,onNav}:{page:Page;open:boolean;onClose:()=>void;onNav:(p:Page)=>void}){

@@ -1,19 +1,25 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Npgsql;
 using SellerFinance.Domain;
 
 namespace SellerFinance.Api;
 
-public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbContext> options) : DbContext(options)
+public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbContext> options) : IdentityDbContext<AppUser>(options)
 {
     public DbSet<OrganizationEntity> Organizations => Set<OrganizationEntity>();
     public DbSet<ProductEntity> Products => Set<ProductEntity>();
     public DbSet<OrderEntity> Orders => Set<OrderEntity>();
     public DbSet<OrderLineEntity> OrderLines => Set<OrderLineEntity>();
+    public DbSet<OrganizationUserEntity> OrganizationUsers => Set<OrganizationUserEntity>();
+    public DbSet<OrganizationInvitationEntity> OrganizationInvitations => Set<OrganizationInvitationEntity>();
+    public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
         modelBuilder.Entity<OrganizationEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ProductEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ProductEntity>().HasIndex(x => new { x.OrganizationId, x.Sku }).IsUnique();
@@ -27,7 +33,55 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Delivery).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.OtherVariableCosts).HasPrecision(19, 4);
         modelBuilder.Entity<OrderEntity>().HasMany(x => x.Lines).WithOne().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<OrganizationUserEntity>().HasKey(x => new { x.OrganizationId, x.UserId });
+        modelBuilder.Entity<OrganizationUserEntity>().HasIndex(x => x.UserId);
+        modelBuilder.Entity<OrganizationInvitationEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<OrganizationInvitationEntity>().HasIndex(x => x.TokenHash).IsUnique();
+        modelBuilder.Entity<AuditLogEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<AuditLogEntity>().HasIndex(x => new { x.OrganizationId, x.CreatedAt });
     }
+}
+
+public sealed class AppUser : IdentityUser
+{
+    public string DisplayName { get; set; } = "";
+    public string Status { get; set; } = "Active";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public enum OrganizationRole { Owner, Admin, Analyst, Viewer }
+
+public sealed class OrganizationUserEntity
+{
+    public string OrganizationId { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public OrganizationRole Role { get; set; }
+    public DateTimeOffset InvitedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? JoinedAt { get; set; }
+}
+
+public sealed class OrganizationInvitationEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string Email { get; set; } = "";
+    public OrganizationRole Role { get; set; }
+    public string TokenHash { get; set; } = "";
+    public string InvitedByUserId { get; set; } = "";
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? AcceptedAt { get; set; }
+}
+
+public sealed class AuditLogEntity
+{
+    public Guid Id { get; set; }
+    public string? OrganizationId { get; set; }
+    public string? UserId { get; set; }
+    public string Action { get; set; } = "";
+    public string EntityType { get; set; } = "";
+    public string? EntityId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string MetadataSafe { get; set; } = "{}";
 }
 
 public sealed class OrganizationEntity
@@ -106,17 +160,18 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Sel
 
 public static class DatabaseSeed
 {
+    private const string DemoTenantId = "demo-organization";
     public static async Task InitializeAsync(SellerFinanceDbContext db)
     {
         await db.Database.MigrateAsync();
         if (await db.Organizations.AnyAsync()) return;
 
-        db.Organizations.Add(new() { Id = DemoStore.TenantId, Name = "Aspan Market" });
+        db.Organizations.Add(new() { Id = DemoTenantId, Name = "Aspan Market" });
         db.Products.AddRange(
-            new ProductEntity { Id="p1", OrganizationId=DemoStore.TenantId, Sku="HOME-101", Name="Органайзер для кухни", CurrentCost=7200m },
-            new ProductEntity { Id="p2", OrganizationId=DemoStore.TenantId, Sku="BEAUTY-220", Name="Набор косметичек", CurrentCost=8900m },
-            new ProductEntity { Id="p3", OrganizationId=DemoStore.TenantId, Sku="TECH-044", Name="Настольная LED-лампа", CurrentCost=9100m },
-            new ProductEntity { Id="p4", OrganizationId=DemoStore.TenantId, Sku="KIDS-018", Name="Развивающий набор" });
+            new ProductEntity { Id="p1", OrganizationId=DemoTenantId, Sku="HOME-101", Name="Органайзер для кухни", CurrentCost=7200m },
+            new ProductEntity { Id="p2", OrganizationId=DemoTenantId, Sku="BEAUTY-220", Name="Набор косметичек", CurrentCost=8900m },
+            new ProductEntity { Id="p3", OrganizationId=DemoTenantId, Sku="TECH-044", Name="Настольная LED-лампа", CurrentCost=9100m },
+            new ProductEntity { Id="p4", OrganizationId=DemoTenantId, Sku="KIDS-018", Name="Развивающий набор" });
 
         db.Orders.AddRange(ToEntity("KSP-10482", new(2026,8,6), "p1", 24990m,2,7200m,null,.109m,700m),
             ToEntity("KSP-10497", new(2026,8,7), "p2",18490m,1,8900m,null,.109m,450m),
@@ -130,7 +185,7 @@ public static class DatabaseSeed
     private static OrderEntity ToEntity(string id, DateOnly date, string productId, decimal revenue, int quantity,
         decimal? cost, decimal? actualFee, decimal feeRate, decimal delivery) => new()
         {
-            Id=id, ExternalId=id, OrganizationId=DemoStore.TenantId, Status=OrderStatus.Completed, Date=date,
+            Id=id, ExternalId=id, OrganizationId=DemoTenantId, Status=OrderStatus.Completed, Date=date,
             Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, UnitCost=cost, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
         };
 }

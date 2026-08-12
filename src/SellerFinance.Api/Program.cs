@@ -1,174 +1,158 @@
-using SellerFinance.Domain;
-using SellerFinance.Api;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using SellerFinance.Api;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
-    .WithOrigins("http://localhost:5173")
-    .AllowAnyHeader()
-    .AllowAnyMethod()));
-builder.Services.AddSingleton<DemoStore>();
-var databaseConnection = DatabaseConfiguration.GetConnectionString(builder.Configuration);
-if (databaseConnection is not null)
-    builder.Services.AddDbContext<SellerFinanceDbContext>(options => options.UseNpgsql(databaseConnection));
+var connection = DatabaseConfiguration.GetConnectionString(builder.Configuration)
+    ?? throw new InvalidOperationException("DATABASE_URL is required.");
+builder.Services.AddDbContext<SellerFinanceDbContext>(o => o.UseNpgsql(connection));
+builder.Services.AddIdentityCore<AppUser>(o =>
+{
+    o.User.RequireUniqueEmail = true;
+    o.SignIn.RequireConfirmedEmail = false; // SMTP provider is configured in the next delivery slice.
+    o.Password.RequiredLength = 10;
+    o.Password.RequireNonAlphanumeric = false;
+}).AddEntityFrameworkStores<SellerFinanceDbContext>().AddSignInManager().AddDefaultTokenProviders();
+builder.Services.AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies();
+builder.Services.ConfigureApplicationCookie(o =>
+{
+    o.Cookie.Name = "seller_finance_session";
+    o.Cookie.HttpOnly = true;
+    o.Cookie.SameSite = SameSiteMode.Lax;
+    o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    o.SlidingExpiration = true;
+    o.ExpireTimeSpan = TimeSpan.FromDays(14);
+    o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = 401; return Task.CompletedTask; };
+    o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
+});
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
-if (databaseConnection is not null)
-{
-    await using var scope = app.Services.CreateAsyncScope();
+await using (var scope = app.Services.CreateAsyncScope())
     await DatabaseSeed.InitializeAsync(scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>());
-}
-app.UseCors();
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
-app.Use(async (context, next) =>
-{
-    var tenantId = context.Request.Headers["X-Organization-Id"].ToString();
-    if (context.Request.Path.StartsWithSegments("/api/v1") && String.IsNullOrWhiteSpace(tenantId))
-    {
-        context.Response.StatusCode = StatusCodes.Status400BadRequest;
-        await context.Response.WriteAsJsonAsync(new { title = "Не выбрана организация", status = 400 });
-        return;
-    }
-    context.Items["tenant"] = tenantId;
-    await next();
-});
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapGet("/health", () => Results.Ok(new { status="healthy", service="SellerFinance.Api" }));
+app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
+    ? Results.Ok(new { status="healthy", provider="PostgreSQL" })
+    : Results.Problem("Database connection failed", statusCode:503));
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "SellerFinance.Api" }));
-if (databaseConnection is not null)
+var auth = app.MapGroup("/api/v1/auth");
+auth.MapPost("/register", async (RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
-    app.MapGet("/health/database", async (SellerFinanceDbContext db) =>
-        await db.Database.CanConnectAsync()
-            ? Results.Ok(new { status = "healthy", provider = "PostgreSQL" })
-            : Results.Problem("Database connection failed", statusCode: 503));
-}
-else
-{
-    app.MapGet("/health/database", () => Results.Ok(new { status = "not-configured" }));
-}
-
-var api = app.MapGroup("/api/v1");
-api.MapGet("/session", async (HttpContext ctx, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    var organization = db is null ? null : await db.Organizations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == ctx.Tenant());
-    return Results.Ok(new { organizationId=ctx.Tenant(), organizationName=organization?.Name ?? "Aspan Market", userName="Алия", role="Owner", plan="Pro" });
-});
-api.MapGet("/analytics/summary", async (HttpContext ctx, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    return Results.Ok(db is null ? store.Summary() : await DbAnalytics.SummaryAsync(db, ctx.Tenant()));
-});
-api.MapGet("/analytics/timeseries", async (HttpContext ctx, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    return Results.Ok(db is null ? store.TimeSeries : await DbAnalytics.TimeSeriesAsync(db, ctx.Tenant()));
-});
-api.MapGet("/analytics/products", async (HttpContext ctx, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    return Results.Ok(db is null ? store.Products : await DbAnalytics.ProductsAsync(db, ctx.Tenant()));
-});
-api.MapGet("/analytics/abc", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Abc()) : Results.NotFound());
-api.MapGet("/orders", async (HttpContext ctx, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    return Results.Ok(db is null ? store.Orders : await DbAnalytics.OrdersAsync(db, ctx.Tenant()));
-});
-api.MapPost("/products/{id}/costs", async (HttpContext ctx, string id, ProductCostRequest request, DemoStore store) =>
-{
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    if (request.Cost <= 0) return Results.BadRequest(new { title="Себестоимость должна быть больше нуля" });
-    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
-    if (db is null) return Results.Problem("PostgreSQL не настроен", statusCode: 503);
-    var product = await db.Products.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == ctx.Tenant());
-    if (product is null) return Results.NotFound();
-    product.CurrentCost = request.Cost;
-    var affectedLines = await db.OrderLines.Where(x => x.ProductId == id && x.UnitCost == null).ToListAsync();
-    foreach (var line in affectedLines) line.UnitCost = request.Cost;
+    if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
+        return Results.BadRequest(new { title="Укажите название организации" });
+    var user = new AppUser { UserName=request.Email.Trim().ToLowerInvariant(), Email=request.Email.Trim().ToLowerInvariant(), DisplayName=request.DisplayName.Trim(), EmailConfirmed=true };
+    var result = await users.CreateAsync(user, request.Password);
+    if (!result.Succeeded) return Results.ValidationProblem(result.Errors.GroupBy(x=>x.Code).ToDictionary(x=>x.Key,x=>x.Select(y=>y.Description).ToArray()));
+    var organization = new OrganizationEntity { Id=Guid.NewGuid().ToString("N"), Name=request.OrganizationName.Trim() };
+    db.Organizations.Add(organization);
+    db.OrganizationUsers.Add(new() { OrganizationId=organization.Id, UserId=user.Id, Role=OrganizationRole.Owner, JoinedAt=DateTimeOffset.UtcNow });
+    db.AuditLogs.Add(new() { Id=Guid.NewGuid(), OrganizationId=organization.Id, UserId=user.Id, Action="organization.created", EntityType="Organization", EntityId=organization.Id });
     await db.SaveChangesAsync();
-    return Results.Ok(new { productId=id, cost=request.Cost, updatedOrderLines=affectedLines.Count });
+    await signIn.SignInAsync(user, isPersistent:true);
+    return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
 });
-api.MapPost("/integrations/kaspi/verify", (HttpContext ctx, KaspiTokenRequest request, DemoStore store) =>
+auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
-    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
-    if (String.IsNullOrWhiteSpace(request.Token) || request.Token.Length < 16)
-        return Results.BadRequest(new { title = "Токен имеет неверный формат" });
-    return Results.Ok(new { status = "verified", maskedToken = $"••••{request.Token[^4..]}" });
+    var user = await users.FindByEmailAsync(request.Email.Trim());
+    if (user is null || (await signIn.PasswordSignInAsync(user, request.Password, request.RememberMe, lockoutOnFailure:true)).Succeeded is false)
+        return Results.Problem("Неверный email или пароль", statusCode:401);
+    db.AuditLogs.Add(new() { Id=Guid.NewGuid(), UserId=user.Id, Action="auth.login", EntityType="User", EntityId=user.Id });
+    await db.SaveChangesAsync();
+    return Results.Ok(new { status="authenticated" });
 });
-api.MapPost("/integrations/kaspi/sync", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant())
-        ? Results.Accepted(value: new { jobId = Guid.NewGuid(), status = "queued", message = "Синхронизация поставлена в очередь" })
-        : Results.NotFound());
+auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
+auth.MapPost("/forgot-password", async (ForgotPasswordRequest request, UserManager<AppUser> users) =>
+{
+    var user = await users.FindByEmailAsync(request.Email.Trim());
+    if (user is not null) _ = await users.GeneratePasswordResetTokenAsync(user);
+    return Results.Ok(new { message="Если аккаунт существует, инструкция будет отправлена на email." });
+});
+auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users) =>
+{
+    var user=await users.FindByEmailAsync(request.Email.Trim());
+    if (user is null) return Results.BadRequest(new { title="Недействительный запрос" });
+    var result=await users.ResetPasswordAsync(user,request.Token,request.NewPassword);
+    return result.Succeeded ? Results.NoContent() : Results.ValidationProblem(result.Errors.GroupBy(x=>x.Code).ToDictionary(x=>x.Key,x=>x.Select(y=>y.Description).ToArray()));
+});
+
+var api = app.MapGroup("/api/v1").RequireAuthorization();
+api.AddEndpointFilter(async (invocation, next) =>
+{
+    var context=invocation.HttpContext;
+    if (context.Request.Path.StartsWithSegments("/api/v1/auth")) return await next(invocation);
+    var db=context.RequestServices.GetRequiredService<SellerFinanceDbContext>();
+    var membership=await TenantSecurity.ResolveAsync(context,db);
+    if (membership is null) return Results.NotFound();
+    context.Items["membership"]=membership;
+    return await next(invocation);
+});
+api.MapGet("/session", async (HttpContext ctx, SellerFinanceDbContext db) =>
+{
+    var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==ctx.Tenant());
+    var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==ctx.User.FindFirstValue(ClaimTypes.NameIdentifier));
+    return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name, role=ctx.Membership().Role.ToString(), plan="Trial" });
+});
+api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext db) =>
+{
+    var userId=user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    return Results.Ok(await (from m in db.OrganizationUsers.AsNoTracking() join o in db.Organizations on m.OrganizationId equals o.Id where m.UserId==userId&&m.JoinedAt!=null select new { o.Id,o.Name,role=m.Role.ToString() }).ToArrayAsync());
+});
+api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db) =>
+{
+    if (id!=ctx.Tenant()) return Results.NotFound();
+    if (!ctx.Membership().CanManageMembers()) return Results.Forbid();
+    if (!Enum.TryParse<OrganizationRole>(request.Role,true,out var role) || role==OrganizationRole.Owner) return Results.BadRequest(new { title="Недопустимая роль" });
+    var token=TokenTools.CreateToken();
+    db.OrganizationInvitations.Add(new() { Id=Guid.NewGuid(), OrganizationId=id, Email=request.Email.Trim().ToLowerInvariant(), Role=role, TokenHash=TokenTools.Hash(token), InvitedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!, ExpiresAt=DateTimeOffset.UtcNow.AddDays(7) });
+    AuditWriter.Add(db,ctx,"member.invited","OrganizationInvitation",metadataSafe:$"{{\"role\":\"{role}\"}}");
+    await db.SaveChangesAsync();
+    return Results.Ok(new { invitationToken=token, expiresInDays=7 });
+});
+api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationRequest request, SellerFinanceDbContext db) =>
+{
+    var invitation=await db.OrganizationInvitations.SingleOrDefaultAsync(x=>x.TokenHash==TokenTools.Hash(request.Token)&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow);
+    if (invitation is null) return Results.BadRequest(new { title="Приглашение недействительно или истекло" });
+    var userId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==userId);
+    if (!String.Equals(user.Email,invitation.Email,StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+    var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==invitation.OrganizationId&&x.UserId==userId);
+    if (membership is null) db.OrganizationUsers.Add(new() { OrganizationId=invitation.OrganizationId, UserId=userId, Role=invitation.Role, InvitedAt=DateTimeOffset.UtcNow, JoinedAt=DateTimeOffset.UtcNow });
+    else { membership.Role=invitation.Role; membership.JoinedAt=DateTimeOffset.UtcNow; }
+    invitation.AcceptedAt=DateTimeOffset.UtcNow;
+    AuditWriter.Add(db,ctx,"member.invitation.accepted","OrganizationInvitation",invitation.Id.ToString());
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.SummaryAsync(db,c.Tenant())));
+api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant())));
+api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant())));
+api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant())));
+api.MapPost("/products/{id}/costs", async (HttpContext ctx,string id,ProductCostRequest request,SellerFinanceDbContext db) =>
+{
+    if (!ctx.Membership().CanWrite()) return Results.Forbid();
+    if(request.Cost<=0) return Results.BadRequest(new { title="Себестоимость должна быть больше нуля" });
+    var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());
+    if(product is null) return Results.NotFound();
+    product.CurrentCost=request.Cost;
+    AuditWriter.Add(db,ctx,"product.cost.changed","Product",id);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { productId=id,cost=request.Cost });
+});
 
 app.MapFallbackToFile("index.html");
-
 app.Run();
 
-record KaspiTokenRequest(string Token);
-record ProductCostRequest(decimal Cost, DateOnly? EffectiveFrom);
-
-static class TenantContext
-{
-    public static string Tenant(this HttpContext context) => context.Items["tenant"]?.ToString() ?? "";
-}
-
-sealed class DemoStore
-{
-    public const string TenantId = "demo-organization";
-    public object Session => new { organizationId = TenantId, organizationName = "Aspan Market", userName = "Алия", role = "Owner", plan = "Pro" };
-
-    public IReadOnlyList<OrderFact> Facts { get; } =
-    [
-        new("KSP-10482", TenantId, OrderStatus.Completed, new(2026, 8, 6), [new("p1", 24990m, 2, 7200m, null, .109m, 700m)]),
-        new("KSP-10497", TenantId, OrderStatus.Completed, new(2026, 8, 7), [new("p2", 18490m, 1, 8900m, null, .109m, 450m)]),
-        new("KSP-10511", TenantId, OrderStatus.Completed, new(2026, 8, 8), [new("p3", 42900m, 3, 9100m, 4200m, .109m, 900m)]),
-        new("KSP-10529", TenantId, OrderStatus.Completed, new(2026, 8, 9), [new("p4", 12990m, 1, null, null, .12m, 350m)]),
-        new("KSP-10543", TenantId, OrderStatus.Completed, new(2026, 8, 10), [new("p1", 37485m, 3, 7200m, null, .109m, 800m)]),
-        new("KSP-10561", TenantId, OrderStatus.Completed, new(2026, 8, 11), [new("p2", 36980m, 2, 8900m, null, .109m, 650m)]),
-        new("KSP-10566", TenantId, OrderStatus.Returned, new(2026, 8, 11), [new("p3", 14300m, 1, 9100m, null, .109m, 350m)])
-    ];
-
-    public object[] Products =>
-    [
-        new { id="p1", sku="HOME-101", name="Органайзер для кухни", units=5, revenue=62475m, cogs=36000m, profit=18865m, margin=30.2m, cost=7200m, status="profitable" },
-        new { id="p2", sku="BEAUTY-220", name="Набор косметичек", units=3, revenue=55470m, cogs=26700m, profit=22173m, margin=40.0m, cost=8900m, status="profitable" },
-        new { id="p3", sku="TECH-044", name="Настольная LED-лампа", units=3, revenue=42900m, cogs=27300m, profit=10400m, margin=24.2m, cost=9100m, status="profitable" },
-        new { id="p4", sku="KIDS-018", name="Развивающий набор", units=1, revenue=12990m, cogs=(decimal?)null, profit=(decimal?)null, margin=(decimal?)null, cost=(decimal?)null, status="missing-cost" }
-    ];
-
-    public object[] Orders => Facts.Select(x => new
-    {
-        id=x.Id, date=x.Date, status=x.Status.ToString().ToUpperInvariant(),
-        amount=x.Lines.Sum(y => y.Revenue), items=x.Lines.Sum(y => y.Quantity),
-        complete=x.Lines.All(y => y.UnitCost.HasValue)
-    }).Cast<object>().ToArray();
-
-    public object[] TimeSeries => Facts.Where(x => x.Status == OrderStatus.Completed).GroupBy(x => x.Date)
-        .Select(g => { var f=FinanceCalculator.Calculate(g); return new { date=g.Key, revenue=f.Revenue, profit=f.OperatingProfit }; })
-        .Cast<object>().ToArray();
-
-    public object Summary()
-    {
-        var result = FinanceCalculator.Calculate(Facts, 12500m);
-        return new { result.Revenue, orders=Facts.Count(x => x.Status == OrderStatus.Completed), units=Facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).Sum(x=>x.Quantity), result.Cogs, result.GrossProfit, result.MarketplaceFees, result.Delivery, result.OperatingProfit, result.OperatingMarginPct, result.CoveragePct, result.IsPreliminary };
-    }
-
-    public object[] Abc()
-    {
-        var rows = Products.OrderByDescending(x => (decimal?)x.GetType().GetProperty("profit")!.GetValue(x) ?? 0m).ToArray();
-        var total = rows.Sum(x => (decimal?)x.GetType().GetProperty("profit")!.GetValue(x) ?? 0m);
-        decimal running = 0;
-        return rows.Select(x => { running += (decimal?)x.GetType().GetProperty("profit")!.GetValue(x) ?? 0m; var pct=total == 0 ? 0 : running/total*100; return new { product=x, group=pct <= 80 ? "A" : pct <= 95 ? "B" : "C", cumulative=Decimal.Round(pct,1) }; }).Cast<object>().ToArray();
-    }
-
-    public bool HasTenant(string tenantId) => tenantId == TenantId;
-}
-
+record RegisterRequest(string Email,string Password,string DisplayName,string OrganizationName);
+record LoginRequest(string Email,string Password,bool RememberMe=true);
+record ForgotPasswordRequest(string Email);
+record ResetPasswordRequest(string Email,string Token,string NewPassword);
+record InviteMemberRequest(string Email,string Role);
+record AcceptInvitationRequest(string Token);
+record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 public partial class Program { }
