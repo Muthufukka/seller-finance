@@ -1967,7 +1967,7 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
   };
   const toggleStatus = async () => {
     if(!selected)return;const current=statusOverrides[selected.id]??selected.productStatus??(selected.status==="archived"?"Archived":"Active");const next=current==="Archived"?"Active":"Archived";const response=await fetch(`/api/v1/products/${selected.id}/status`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({status:next})});
-    if(!response.ok){setMessage((await response.json().catch(()=>null))?.title||"Не удалось изменить статус товара");return;}setStatusOverrides(value=>({...value,[selected.id]:next}));setSelected({...selected,productStatus:next,status:next==="Archived"?"archived":selected.cost===null?"missing-cost":"profitable"});setDetail((value:any)=>value?{...value,status:next}:value);setMessage(next==="Archived"?"Товар перемещён в архив":"Товар возвращён в активные");
+    if(!response.ok){setMessage((await response.json().catch(()=>null))?.title||t("products.statusError"));return;}setStatusOverrides(value=>({...value,[selected.id]:next}));setSelected({...selected,productStatus:next,status:next==="Archived"?"archived":selected.cost===null?"missing-cost":"profitable"});setDetail((value:any)=>value?{...value,status:next}:value);setMessage(next==="Archived"?t("products.movedArchive"):t("products.restored"));
   };
   return (
     <section className="content">
@@ -2034,47 +2034,47 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
             </button>
             <span className="eyebrow">{selected.sku}</span>
             <h2>{selected.name}</h2>
-            <div className="product-status-row"><span className={(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"pill archived":"pill"}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"Архив":"Активен"}</span>{session.role!=="Viewer"&&<button type="button" className="secondary" onClick={toggleStatus}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"Вернуть в активные":"Архивировать"}</button>}</div>
+            <div className="product-status-row"><span className={(statusOverrides[selected.id]??selected.productStatus)==="Archived"?"pill archived":"pill"}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?t("products.archive"):t("products.active")}</span>{session.role!=="Viewer"&&<button type="button" className="secondary" onClick={toggleStatus}>{(statusOverrides[selected.id]??selected.productStatus)==="Archived"?t("product.restore"):t("product.archiveAction")}</button>}</div>
             <div className="product-chart-head">
               <div>
-                <h3>Динамика товара</h3>
-                <p>{dateFrom && dateTo ? `${new Date(dateFrom).toLocaleDateString("ru-RU")} — ${new Date(dateTo).toLocaleDateString("ru-RU")}` : "За весь период"}</p>
+                <h3>{t("product.dynamics")}</h3>
+                <p>{dateFrom && dateTo ? `${new Date(dateFrom).toLocaleDateString(localeCode)} — ${new Date(dateTo).toLocaleDateString(localeCode)}` : t("product.allPeriod")}</p>
               </div>
-              <div className="legend"><span><i className="revenue" />Выручка</span><span><i className="profit" />Прибыль</span></div>
+              <div className="legend"><span><i className="revenue" />{t("product.revenue")}</span><span><i className="profit" />{t("product.profit")}</span></div>
             </div>
-            {seriesLoading ? <p className="muted">Загрузка динамики…</p> : series.length ? (
-              <div className="product-chart" aria-label="Выручка и прибыль товара по дням">
+            {seriesLoading ? <p className="muted">{t("product.loading")}</p> : series.length ? (
+              <div className="product-chart" aria-label={t("product.chartLabel")}>
                 {series.map((point) => {
                   const scale=Math.max(...series.flatMap(x=>[Math.abs(x.revenue),Math.abs(x.operatingProfit)]),1);
-                  return <div className="product-bar" key={point.date} title={`${new Date(point.date).toLocaleDateString("ru-RU")}: выручка ${money(point.revenue)}, прибыль ${money(point.operatingProfit)}, Coverage ${pct(point.coveragePct)}`}>
+                  return <div className="product-bar" key={point.date} title={`${new Date(point.date).toLocaleDateString(localeCode)}: ${t("product.revenue")} ${money(point.revenue)}, ${t("product.profit")} ${money(point.operatingProfit)}, Coverage ${pct(point.coveragePct)}`}>
                     <div><i className="profit-bar" style={{height:`${Math.max(2,Math.abs(point.operatingProfit)/scale*100)}%`}}/><i className="revenue-bar" style={{height:`${Math.max(2,Math.abs(point.revenue)/scale*100)}%`}}/></div>
-                    <small>{new Date(point.date).toLocaleDateString("ru-RU",{day:"2-digit",month:"short"})}</small>
+                    <small>{new Date(point.date).toLocaleDateString(localeCode,{day:"2-digit",month:"short"})}</small>
                   </div>;
                 })}
               </div>
-            ) : <p className="product-chart-empty">За выбранный период продаж и расходов по товару нет.</p>}
+            ) : <p className="product-chart-empty">{t("product.emptySeries")}</p>}
             <form className="cost-form" onSubmit={addCost}>
               <label>
-                Себестоимость
+                {t("product.cost")}
                 <input name="cost" type="number" min="0.01" step="0.01" required />
               </label>
               <label>
-                Действует с
+                {t("product.effectiveFrom")}
                 <input name="date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
               </label>
-              <button className="primary">Добавить</button>
+              <button className="primary">{t("product.add")}</button>
             </form>
-            <h3>История себестоимости</h3>
+            <h3>{t("product.costHistory")}</h3>
             <div className="cost-history">
               {detail?.costHistory?.map((x: any) => (
                 <div key={x.id}>
                   <b>{money(x.costAmount)}</b>
                   <span>
-                    с {new Date(x.effectiveFrom).toLocaleDateString("ru-RU")} · {x.source}
+                    {t("product.from")} {new Date(x.effectiveFrom).toLocaleDateString(localeCode)} · {x.source}
                   </span>
                 </div>
               ))}
-              {detail && !detail.costHistory?.length && <p>История пока пуста.</p>}
+              {detail && !detail.costHistory?.length && <p>{t("product.historyEmpty")}</p>}
             </div>
           </article>
         </div>
@@ -2083,26 +2083,27 @@ function Products({ products, session, dateFrom, dateTo, openProductId }: { prod
   );
 }
 function ImportPreview({ preview, onConfirm }: { preview: any; onConfirm: () => void }) {
+  const { t } = useI18n();
   return (
     <article className="import-preview">
       <div>
-        <h2>Предпросмотр импорта</h2>
+        <h2>{t("import.preview")}</h2>
         <p>
-          Строк: {preview.totalRows} · найдено: {preview.matchedRows} · не сопоставлено: {preview.unmatchedRows} · ошибки: {preview.errorRows} · дубли: {preview.duplicateRows}
+          {t("import.rows")}: {preview.totalRows} · {t("import.matched")}: {preview.matchedRows} · {t("import.unmatched")}: {preview.unmatchedRows} · {t("import.errors")}: {preview.errorRows} · {t("import.duplicates")}: {preview.duplicateRows}
         </p>
       </div>
       <button className="primary" onClick={onConfirm} disabled={!preview.expectedChanges}>
-        Применить {preview.expectedChanges} изменений
+        {t("import.apply")} {preview.expectedChanges} {t("import.changes")}
       </button>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Строка</th>
+              <th>{t("import.row")}</th>
               <th>SKU</th>
-              <th>Себестоимость</th>
-              <th>Дата</th>
-              <th>Статус</th>
+              <th>{t("import.cost")}</th>
+              <th>{t("import.date")}</th>
+              <th>{t("import.status")}</th>
             </tr>
           </thead>
           <tbody>

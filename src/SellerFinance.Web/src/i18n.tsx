@@ -14,10 +14,17 @@ const productsRu={
 const productsKk:Record<keyof typeof productsRu,string>={
   "products.eyebrow":"КАТАЛОГ","products.title":"Тауарлар","products.lead":"SKU бойынша сатылым, өзіндік құн тарихы және Coverage.","products.import":"CSV/XLSX импорты","products.search":"SKU немесе атауы бойынша іздеу","products.all":"Барлық тауарлар","products.profitable":"Пайдалы","products.loss":"Залалды","products.missing":"Өзіндік құнсыз","products.archived":"Мұрағатта","products.sort":"Тауарларды сұрыптау","products.nameAsc":"Атауы: А–Я","products.skuAsc":"SKU: А–Я","products.unitsDesc":"Сатылым: көп","products.revenueDesc":"Түсім: көп","products.profitDesc":"Пайда: көп","products.profitAsc":"Пайда: аз","products.marginDesc":"Маржа: көп","products.coverageAsc":"Coverage: аз","products.product":"Тауар","products.sales":"Сатылым","products.revenue":"Түсім","products.expenses":"Шығындар","products.profit":"Пайда","products.margin":"Маржа","products.status":"Күйі","products.archive":"Мұрағат","products.active":"Белсенді","products.direct":"Тікелей","products.allocated":"бөлінген","products.checking":"Файл тексерілуде…","products.importError":"Импорт қатесі","products.applied":"Қолданылған жолдар","products.applyError":"Импортты қолдану мүмкін болмады","products.costAdded":"Өзіндік құн қосылды","products.error":"Қате","products.statusError":"Тауар күйін өзгерту мүмкін болмады","products.movedArchive":"Тауар мұрағатқа көшірілді","products.restored":"Тауар белсендіге қайтарылды","products.seriesError":"Тауар динамикасын жүктеу мүмкін болмады"
 };
+const productDetailRu={
+  "product.restore":"Вернуть в активные","product.archiveAction":"Архивировать","product.dynamics":"Динамика товара","product.allPeriod":"За весь период","product.revenue":"Выручка","product.profit":"Прибыль","product.loading":"Загрузка динамики…","product.chartLabel":"Выручка и прибыль товара по дням","product.emptySeries":"За выбранный период продаж и расходов по товару нет.","product.cost":"Себестоимость","product.effectiveFrom":"Действует с","product.add":"Добавить","product.costHistory":"История себестоимости","product.from":"с","product.historyEmpty":"История пока пуста.","import.preview":"Предпросмотр импорта","import.rows":"Строк","import.matched":"найдено","import.unmatched":"не сопоставлено","import.errors":"ошибки","import.duplicates":"дубли","import.apply":"Применить","import.changes":"изменений","import.row":"Строка","import.cost":"Себестоимость","import.date":"Дата","import.status":"Статус"
+} as const;
+const productDetailKk:Record<keyof typeof productDetailRu,string>={
+  "product.restore":"Белсендіге қайтару","product.archiveAction":"Мұрағаттау","product.dynamics":"Тауар динамикасы","product.allPeriod":"Барлық кезеңде","product.revenue":"Түсім","product.profit":"Пайда","product.loading":"Динамика жүктелуде…","product.chartLabel":"Тауардың күндер бойынша түсімі мен пайдасы","product.emptySeries":"Таңдалған кезеңде тауар бойынша сатылым мен шығын жоқ.","product.cost":"Өзіндік құн","product.effectiveFrom":"Басталу күні","product.add":"Қосу","product.costHistory":"Өзіндік құн тарихы","product.from":"бастап","product.historyEmpty":"Тарих әзірге бос.","import.preview":"Импортты алдын ала қарау","import.rows":"Жолдар","import.matched":"табылды","import.unmatched":"сәйкестенбеді","import.errors":"қателер","import.duplicates":"қайталанғандар","import.apply":"Қолдану","import.changes":"өзгеріс","import.row":"Жол","import.cost":"Өзіндік құн","import.date":"Күні","import.status":"Күйі"
+};
 
 export const ru = {
   ...ordersRu,
   ...productsRu,
+  ...productDetailRu,
   "brand.name": "Seller Finance",
   "common.wait": "Подождите…",
   "common.logout": "выйти",
@@ -80,6 +87,7 @@ export type TranslationKey=keyof typeof ru;
 const kk:Record<TranslationKey,string>={
   ...ordersKk,
   ...productsKk,
+  ...productDetailKk,
   "brand.name":"Seller Finance","common.wait":"Күте тұрыңыз…","common.logout":"шығу","common.create":"Құру",
   "auth.login.title":"Кіру","auth.login.lead":"Пайда мен өзіндік құнды бір жерден басқарыңыз.","auth.login.submit":"Кіру",
   "auth.register.title":"Тіркелгі ашу","auth.register.lead":"Сатушының қорғалған жұмыс кеңістігін құрыңыз.","auth.register.submit":"Тіркелу","auth.register.name":"Атыңыз","auth.register.organization":"Ұйым атауы",
