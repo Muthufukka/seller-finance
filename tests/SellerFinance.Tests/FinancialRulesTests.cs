@@ -47,6 +47,17 @@ public sealed class FinancialRulesTests
     }
 
     [Fact]
+    public async Task Overlap_Check_Is_Tenant_And_Scope_Target_Aware()
+    {
+        await using var db=CreateDb();var existing=Rule(FeeRuleScope.Product,10,"p1");existing.EffectiveFrom=new(2026,1,1);existing.EffectiveTo=new(2026,1,31);db.FeeRules.Add(existing);await db.SaveChangesAsync();
+        Assert.True(await FeeRulePeriods.OverlapsAsync(db,"org",FeeRuleScope.Product,"p1",null,new(2026,1,31),new(2026,2,10)));
+        Assert.False(await FeeRulePeriods.OverlapsAsync(db,"org",FeeRuleScope.Product,"p2",null,new(2026,1,15),new(2026,1,20)));
+        Assert.False(await FeeRulePeriods.OverlapsAsync(db,"other",FeeRuleScope.Product,"p1",null,new(2026,1,15),new(2026,1,20)));
+        Assert.False(await FeeRulePeriods.OverlapsAsync(db,"org",FeeRuleScope.Product,"p1",null,new(2026,2,1),null));
+        Assert.False(await FeeRulePeriods.OverlapsAsync(db,"org",FeeRuleScope.Product,"p1",null,new(2026,1,1),new(2026,1,31),existing.Id));
+    }
+
+    [Fact]
     public async Task Period_Expense_Reduces_Operating_Profit()
     {
         await using var db=CreateDb();SeedOrder(db);db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Type=ExpenseType.Advertising,Amount=100,Date=new(2026,8,1),CreatedByUserId="user"});await db.SaveChangesAsync();
