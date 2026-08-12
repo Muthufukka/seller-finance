@@ -137,10 +137,28 @@ api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationReque
     await db.SaveChangesAsync();
     return Results.NoContent();
 });
-api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.SummaryAsync(db,c.Tenant())));
-api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant())));
-api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant())));
+api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo) => Results.Ok(await DbAnalytics.SummaryAsync(db,c.Tenant(),dateFrom,dateTo)));
+api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant(),dateFrom,dateTo)));
+api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant(),dateFrom,dateTo)));
+api.MapGet("/analytics/abc",async(HttpContext c,SellerFinanceDbContext db,string? metric,DateOnly? dateFrom,DateOnly? dateTo)=>Results.Ok(await DbAnalytics.AbcAsync(db,c.Tenant(),metric??"profit",dateFrom,dateTo)));
 api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db) => Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant())));
+api.MapGet("/orders/{id}",async(HttpContext c,string id,SellerFinanceDbContext db)=>{var result=await DbAnalytics.OrderDetailAsync(db,c.Tenant(),id);return result is null?Results.NotFound():Results.Ok(result);});
+api.MapGet("/fee-rules",async(HttpContext c,SellerFinanceDbContext db)=>Results.Ok(await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==c.Tenant()).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,scope=x.Scope.ToString(),x.ProductId,x.Category,valueType=x.ValueType.ToString(),x.Value,x.EffectiveFrom,x.EffectiveTo}).ToArrayAsync()));
+api.MapPost("/fee-rules",async(HttpContext c,FeeRuleRequest request,SellerFinanceDbContext db)=>
+{
+    if(!c.Membership().CanWrite())return Results.Forbid();if(!Enum.TryParse<FeeRuleScope>(request.Scope,true,out var scope)||!Enum.TryParse<FeeValueType>(request.ValueType,true,out var type))return Results.BadRequest(new{title="Некорректный тип правила"});if(request.Value<0||type==FeeValueType.Percentage&&request.Value>100)return Results.BadRequest(new{title="Некорректное значение комиссии"});if(scope==FeeRuleScope.Product&&!await db.Products.AnyAsync(x=>x.Id==request.ProductId&&x.OrganizationId==c.Tenant()))return Results.NotFound();
+    var rule=new FeeRuleEntity{Id=Guid.NewGuid(),OrganizationId=c.Tenant(),Scope=scope,ProductId=scope==FeeRuleScope.Product?request.ProductId:null,Category=scope==FeeRuleScope.Category?request.Category:null,ValueType=type,Value=request.Value,EffectiveFrom=request.EffectiveFrom,EffectiveTo=request.EffectiveTo,CreatedByUserId=c.User.FindFirstValue(ClaimTypes.NameIdentifier)!};db.FeeRules.Add(rule);AuditWriter.Add(db,c,"fee.rule.created","FeeRule",rule.Id.ToString());await db.SaveChangesAsync();return Results.Created($"/api/v1/fee-rules/{rule.Id}",new{rule.Id});
+});
+api.MapPost("/order-lines/{id:guid}/actual-fee",async(HttpContext c,Guid id,ActualFeeRequest request,SellerFinanceDbContext db)=>
+{
+    if(!c.Membership().CanWrite())return Results.Forbid();if(request.Amount<0)return Results.BadRequest(new{title="Сумма не может быть отрицательной"});var line=await(from l in db.OrderLines join o in db.Orders on l.OrderId equals o.Id where l.Id==id&&o.OrganizationId==c.Tenant() select l).SingleOrDefaultAsync();if(line is null)return Results.NotFound();var fee=await db.ActualFees.SingleOrDefaultAsync(x=>x.OrganizationId==c.Tenant()&&x.OrderLineId==id);if(fee is null){fee=new(){Id=Guid.NewGuid(),OrganizationId=c.Tenant(),OrderLineId=id,CreatedByUserId=c.User.FindFirstValue(ClaimTypes.NameIdentifier)!};db.ActualFees.Add(fee);}fee.Amount=request.Amount;fee.Source=request.Source??"Manual";AuditWriter.Add(db,c,"actual.fee.changed","OrderLine",id.ToString());await db.SaveChangesAsync();return Results.Ok(new{fee.Id,fee.Amount});
+});
+api.MapGet("/expenses",async(HttpContext c,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo)=>Results.Ok(await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==c.Tenant()&&(!dateFrom.HasValue||x.Date>=dateFrom)&&(!dateTo.HasValue||x.Date<=dateTo)).OrderByDescending(x=>x.Date).Select(x=>new{x.Id,type=x.Type.ToString(),x.Amount,x.Date,x.ProductId,x.OrderId,x.Comment,source=x.Source.ToString()}).ToArrayAsync()));
+api.MapPost("/expenses",async(HttpContext c,ExpenseRequest request,SellerFinanceDbContext db)=>
+{
+    if(!c.Membership().CanWrite())return Results.Forbid();if(!Enum.TryParse<ExpenseType>(request.Type,true,out var type)||request.Amount<=0)return Results.BadRequest(new{title="Проверьте тип и сумму расхода"});if(request.ProductId is not null&&!await db.Products.AnyAsync(x=>x.Id==request.ProductId&&x.OrganizationId==c.Tenant()))return Results.NotFound();if(request.OrderId is not null&&!await db.Orders.AnyAsync(x=>x.Id==request.OrderId&&x.OrganizationId==c.Tenant()))return Results.NotFound();var expense=new ExpenseEntity{Id=Guid.NewGuid(),OrganizationId=c.Tenant(),Type=type,Amount=request.Amount,Date=request.Date,ProductId=request.ProductId,OrderId=request.OrderId,Comment=request.Comment?.Trim(),CreatedByUserId=c.User.FindFirstValue(ClaimTypes.NameIdentifier)!};db.Expenses.Add(expense);AuditWriter.Add(db,c,"expense.created","Expense",expense.Id.ToString());await db.SaveChangesAsync();return Results.Created($"/api/v1/expenses/{expense.Id}",new{expense.Id});
+});
+api.MapDelete("/expenses/{id:guid}",async(HttpContext c,Guid id,SellerFinanceDbContext db)=>{if(!c.Membership().CanWrite())return Results.Forbid();var expense=await db.Expenses.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==c.Tenant());if(expense is null)return Results.NotFound();db.Expenses.Remove(expense);AuditWriter.Add(db,c,"expense.deleted","Expense",id.ToString());await db.SaveChangesAsync();return Results.NoContent();});
 api.MapGet("/kaspi/connection", async (HttpContext ctx,SellerFinanceDbContext db) =>
 {
     var connection=await db.MarketplaceConnections.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi");
@@ -226,4 +244,7 @@ record InviteMemberRequest(string Email,string Role);
 record AcceptInvitationRequest(string Token);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 record KaspiConnectionRequest(string Token);
+record FeeRuleRequest(string Scope,string ValueType,decimal Value,DateOnly EffectiveFrom,DateOnly? EffectiveTo,string? ProductId,string? Category);
+record ActualFeeRequest(decimal Amount,string? Source);
+record ExpenseRequest(string Type,decimal Amount,DateOnly Date,string? ProductId,string? OrderId,string? Comment);
 public partial class Program { }
