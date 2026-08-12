@@ -4,6 +4,7 @@ import { BarChart3, Box, CircleAlert, Download, LayoutDashboard, LogIn, Menu, Pa
 import "./styles.css";
 import { AdminConsole } from "./AdminConsole";
 import { KaspiConnections } from "./KaspiConnections";
+import { I18nProvider, useI18n } from "./i18n";
 
 type Summary = {
   revenue: number;
@@ -156,6 +157,7 @@ const money = (v: number | null) => (v === null ? "—" : new Intl.NumberFormat(
 const pct = (v: number | null) => (v === null ? "—" : v.toFixed(1).replace(".", ",") + "%");
 
 function App() {
+  const {t,locale,setLocale}=useI18n();
   const [page, setPage] = useState<Page>("dashboard"),
     [menu, setMenu] = useState(false),
     [loading, setLoading] = useState(true);
@@ -226,26 +228,27 @@ function App() {
       <Sidebar page={page} open={menu} onClose={() => setMenu(false)} onNav={navigate} isAdmin={!!session.isSaasAdmin} />
       <main>
         <header>
-          <button className="icon mobile" onClick={() => setMenu(true)} aria-label="Открыть меню">
+          <button className="icon mobile" onClick={() => setMenu(true)} aria-label={t("header.menu")}>
             <Menu />
           </button>
           <div className="org">
             <span className="orgmark">{session.organizationName[0]}</span>
             <label>
-              <select value={session.organizationId} aria-label="Организация" onChange={async(e)=>{const r=await fetch("/api/v1/session",{headers:{"X-Organization-Id":e.target.value}});if(r.ok){setPage("dashboard");setSession(await r.json());}}}>
+              <select value={session.organizationId} aria-label={t("header.organization")} onChange={async(e)=>{const r=await fetch("/api/v1/session",{headers:{"X-Organization-Id":e.target.value}});if(r.ok){setPage("dashboard");setSession(await r.json());}}}>
                 {organizations.length?organizations.map(o=><option key={o.id} value={o.id}>{o.name}</option>):<option value={session.organizationId}>{session.organizationName}</option>}
               </select>
               <small>{session.role}</small>
             </label>
-            <button className="org-add" title="Создать организацию" aria-label="Создать организацию" onClick={async()=>{const name=window.prompt("Название новой организации");if(!name)return;const r=await fetch("/api/v1/organizations",{method:"POST",headers:{"X-Organization-Id":session.organizationId,"Content-Type":"application/json"},body:JSON.stringify({name})});if(!r.ok)return window.alert("Не удалось создать организацию");const created=await r.json();const selected=await fetch("/api/v1/session",{headers:{"X-Organization-Id":created.id}});if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}>+</button>
+            <button className="org-add" title={t("header.createOrganization")} aria-label={t("header.createOrganization")} onClick={async()=>{const name=window.prompt(t("header.organizationPrompt"));if(!name)return;const r=await fetch("/api/v1/organizations",{method:"POST",headers:{"X-Organization-Id":session.organizationId,"Content-Type":"application/json"},body:JSON.stringify({name})});if(!r.ok)return window.alert(t("header.organizationCreateError"));const created=await r.json();const selected=await fetch("/api/v1/session",{headers:{"X-Organization-Id":created.id}});if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}>+</button>
           </div>
           <div className="head-actions">
+            <select className="language-select" aria-label="Language" value={locale} onChange={e=>setLocale(e.target.value as "ru"|"kk")}><option value="ru">RU</option><option value="kk">ҚАЗ</option></select>
             <button className="icon">
               <Search />
             </button>
             <button
               className="avatar"
-              title={`${session.email} — выйти`}
+              title={`${session.email} — ${t("common.logout")}`}
               onClick={async () => {
                 await fetch("/api/v1/auth/logout", { method: "POST" });
                 setSession(null);
@@ -296,6 +299,7 @@ function periodRange(period: string, customFrom: string, customTo: string) {
 }
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+  const {t}=useI18n();
   const params = new URLSearchParams(location.search);
   const [register, setRegister] = useState(false),
     [forgot, setForgot] = useState(false),
@@ -325,18 +329,18 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.message || data?.title || data?.detail || "Не удалось войти");
       if (forgot) {
-        setSuccess("Если аккаунт существует, инструкция отправлена на email.");
+        setSuccess(t("auth.forgot.success"));
         return;
       }
       if (data?.emailConfirmationRequired) {
-        setSuccess("Проверьте почту и подтвердите email.");
+        setSuccess(t("auth.confirm.success"));
         return;
       }
       const sessionResponse = await fetch("/api/v1/session");
-      if (!sessionResponse.ok) throw new Error("Сессия не создана");
+      if (!sessionResponse.ok) throw new Error(t("auth.session.error"));
       onAuthenticated(await sessionResponse.json());
     } catch (ex) {
-      setError(ex instanceof Error ? ex.message : "Ошибка авторизации");
+      setError(ex instanceof Error ? ex.message : t("auth.error"));
     } finally {
       setBusy(false);
     }
@@ -352,8 +356,8 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             Seller<b>Finance</b>
           </div>
         </div>
-        <h1>{forgot ? "Восстановить пароль" : register ? "Создать аккаунт" : "Войти"}</h1>
-        <p>{forgot ? "Отправим одноразовую ссылку, если аккаунт существует." : register ? "Создайте защищённое рабочее пространство продавца." : "Управляйте прибылью и себестоимостью в одном месте."}</p>
+        <h1>{forgot ? t("auth.forgot.title") : register ? t("auth.register.title") : t("auth.login.title")}</h1>
+        <p>{forgot ? t("auth.forgot.lead") : register ? t("auth.register.lead") : t("auth.login.lead")}</p>
         {success ? (
           <div className="auth-success">{success}</div>
         ) : (
@@ -361,31 +365,31 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             {register && (
               <>
                 <label>
-                  Ваше имя
+                  {t("auth.register.name")}
                   <input name="displayName" required autoComplete="name" />
                 </label>
                 <label>
-                  Название организации
+                  {t("auth.register.organization")}
                   <input name="organizationName" required />
                 </label>
               </>
             )}
             <label>
-              Email
+              {t("auth.email")}
               <input name="email" type="email" required autoComplete="email" />
             </label>
             {!forgot && <label>
-              Пароль
+              {t("auth.password")}
               <input name="password" type="password" minLength={10} required autoComplete={register ? "new-password" : "current-password"} />
             </label>}
             {error && <div className="auth-error">{error}</div>}
             <button className="primary" disabled={busy}>
               <LogIn />
-              {busy ? "Подождите…" : forgot ? "Отправить инструкцию" : register ? "Зарегистрироваться" : "Войти"}
+              {busy ? t("common.wait") : forgot ? t("auth.forgot.submit") : register ? t("auth.register.submit") : t("auth.login.submit")}
             </button>
           </form>
         )}
-        {!register && !forgot && <button className="auth-switch" onClick={() => { setForgot(true); setError(""); setSuccess(""); }}>Забыли пароль?</button>}
+        {!register && !forgot && <button className="auth-switch" onClick={() => { setForgot(true); setError(""); setSuccess(""); }}>{t("auth.forgot.link")}</button>}
         <button
           className="auth-switch"
           onClick={() => {
@@ -394,18 +398,19 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             setSuccess("");
           }}
         >
-          {forgot ? "Вернуться ко входу" : register ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться"}
+          {forgot ? t("auth.switch.back") : register ? t("auth.switch.login") : t("auth.switch.register")}
         </button>
       </section>
       <aside className="auth-hero">
-        <span>Финансы маркетплейса без слепых зон</span>
-        <h2>Знайте реальную прибыль каждого заказа и товара.</h2>
-        <p>Себестоимость, комиссии, доставка и расходы — в едином расчёте.</p>
+        <span>{t("auth.hero.eyebrow")}</span>
+        <h2>{t("auth.hero.title")}</h2>
+        <p>{t("auth.hero.lead")}</p>
       </aside>
     </div>
   );
 }
 function ResetPassword({ email, token }: { email: string; token: string }) {
+  const {t}=useI18n();
   const [message, setMessage] = useState("");
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -415,19 +420,19 @@ function ResetPassword({ email, token }: { email: string; token: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, token, newPassword: password }),
     });
-    setMessage(r.ok ? "Пароль изменён. Теперь можно войти." : "Ссылка недействительна или пароль не соответствует требованиям.");
+    setMessage(r.ok ? t("reset.success") : t("reset.error"));
   };
   return (
     <div className="auth-page">
       <section className="auth-panel">
-        <h1>Новый пароль</h1>
+        <h1>{t("reset.title")}</h1>
         <p>{email}</p>
         <form onSubmit={submit}>
           <label>
-            Пароль
+            {t("auth.password")}
             <input name="password" type="password" minLength={10} required />
           </label>
-          <button className="primary">Сохранить пароль</button>
+          <button className="primary">{t("reset.submit")}</button>
           {message && <div className="auth-success">{message}</div>}
         </form>
       </section>
@@ -436,12 +441,13 @@ function ResetPassword({ email, token }: { email: string; token: string }) {
 }
 
 function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: boolean; onClose: () => void; onNav: (p: Page) => void; isAdmin: boolean }) {
+  const {t}=useI18n();
   const nav: [Page, string, React.ReactNode][] = [
-    ["dashboard", "Обзор", <LayoutDashboard />],
-    ["products", "Товары", <Box />],
-    ["orders", "Заказы", <ShoppingBag />],
-    ["abc", "ABC-анализ", <BarChart3 />],
-    ["exports", "Экспорт", <Download />],
+    ["dashboard", t("nav.dashboard"), <LayoutDashboard />],
+    ["products", t("nav.products"), <Box />],
+    ["orders", t("nav.orders"), <ShoppingBag />],
+    ["abc", t("nav.abc"), <BarChart3 />],
+    ["exports", t("nav.exports"), <Download />],
   ];
   return (
     <>
@@ -458,48 +464,48 @@ function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: bo
           </button>
         </div>
         <nav>
-          <small>АНАЛИТИКА</small>
+          <small>{t("nav.analytics")}</small>
           {nav.map(([id, label, icon]) => (
             <button key={id} className={page === id ? "active" : ""} onClick={() => onNav(id)}>
               {icon}
               {label}
             </button>
           ))}
-          <small>УПРАВЛЕНИЕ</small>
+          <small>{t("nav.management")}</small>
           <button className={page === "expenses" ? "active" : ""} onClick={() => onNav("expenses")}>
             <WalletCards />
-            Расходы
+            {t("nav.expenses")}
           </button>
           <button className={page === "fees" ? "active" : ""} onClick={() => onNav("fees")}>
             <Settings />
-            Комиссии
+            {t("nav.fees")}
           </button>
           <button className={page === "integrations" ? "active" : ""} onClick={() => onNav("integrations")}>
             <RefreshCw />
-            Интеграции
+            {t("nav.integrations")}
             <span className="dot" />
           </button>
           <button className={page === "settings" ? "active" : ""} onClick={() => onNav("settings")}>
             <Settings />
-            Настройки
+            {t("nav.settings")}
           </button>
           {isAdmin && (
             <button className={page === "admin" ? "active" : ""} onClick={() => onNav("admin")}>
               <Sparkles />
-              SaaS Admin
+              {t("nav.admin")}
             </button>
           )}
         </nav>
         <div className="plan">
           <div>
             <Sparkles size={16} />
-            Тариф Trial
+            {t("plan.trial")}
           </div>
-          <b>Пилотный период</b>
+          <b>{t("plan.pilot")}</b>
           <span>
             <i />
           </span>
-          <small>1 организация</small>
+          <small>{t("plan.organization")}</small>
         </div>
       </aside>
       {open && <div className="shade" onClick={onClose} />}
@@ -2153,6 +2159,6 @@ function EmptyPage({ title, text, icon }: { title: string; text: string; icon: R
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <I18nProvider><App /></I18nProvider>
   </React.StrictMode>,
 );
