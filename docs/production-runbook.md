@@ -7,7 +7,7 @@
 Public API documentation: `/api-docs`. Machine-readable OpenAPI contract: `/openapi/v1.json`. After every deploy verify critical routes and confirm that the contract contains no secrets or connection strings.
 
 1. Убедиться, что CI-тесты и frontend build успешны.
-2. Проверить обязательные Render settings: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` с HTTPS origin.
+2. Проверить обязательные Render settings: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` с HTTPS origin. Перед включением `EMAIL_CONFIRMATION_REQUIRED=true` задать и проверить `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS=true`, `EMAIL_FROM` и парные `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`.
 3. Выполнить deploy неизменяемого Git commit.
 4. Проверить `/health`, `/health/database`, `/health/ready`.
 5. Проверить вход, `/api/v1/session`, dashboard и одну тестовую выгрузку.

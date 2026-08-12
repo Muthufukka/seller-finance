@@ -27,9 +27,17 @@ services:
         value: "false"
       - key: EMAIL_SMTP_HOST
         sync: false
+      - key: EMAIL_SMTP_PORT
+        value: "587"
+      - key: EMAIL_SMTP_TLS
+        value: "true"
+      - key: EMAIL_SMTP_TIMEOUT_SECONDS
+        value: "15"
       - key: EMAIL_SMTP_USER
         sync: false
       - key: EMAIL_SMTP_PASSWORD
         sync: false
       - key: EMAIL_FROM
         sync: false
+      - key: EMAIL_FROM_NAME
+        value: Seller Finance

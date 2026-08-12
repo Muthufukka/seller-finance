@@ -53,7 +53,10 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 - `TELEGRAM_BOT_USERNAME` — имя бота без `@`;
 - `TELEGRAM_WEBHOOK_SECRET` — случайный secret token для заголовка Telegram webhook;
 - `EMAIL_CONFIRMATION_REQUIRED=true` — требует подтверждённый email для входа;
-- `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD`, `EMAIL_FROM` — доставка confirmation/reset писем.
+- `EMAIL_SMTP_HOST`, `EMAIL_FROM` — SMTP host и валидный адрес отправителя;
+- `EMAIL_SMTP_PORT` (по умолчанию `587`), `EMAIL_SMTP_TLS` (в production обязательно `true`), `EMAIL_SMTP_TIMEOUT_SECONDS` (по умолчанию `15`) — параметры SMTP;
+- `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` — необязательная пара SMTP credentials: задаются только вместе;
+- `EMAIL_FROM_NAME` (по умолчанию `Seller Finance`) — отображаемое имя отправителя.
 
 Секреты задаются только в Render Environment и не добавляются в Git или сообщения.
 
