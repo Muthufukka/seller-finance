@@ -6,6 +6,21 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SellerFinance.Api;
 
+public static class RequestOriginSecurity
+{
+    private static readonly HashSet<string> SafeMethods=["GET","HEAD","OPTIONS","TRACE"];
+    public static bool IsAllowed(HttpContext context,IConfiguration configuration)
+    {
+        if(SafeMethods.Contains(context.Request.Method)||context.Request.Path.Equals("/api/v1/telegram/webhook"))return true;
+        if(context.Request.Headers.TryGetValue("Sec-Fetch-Site",out var fetchSite)&&fetchSite.Any(x=>String.Equals(x,"cross-site",StringComparison.OrdinalIgnoreCase)))return false;
+        var origin=context.Request.Headers.Origin.ToString();if(String.IsNullOrWhiteSpace(origin))return true;
+        if(!Uri.TryCreate(origin,UriKind.Absolute,out var supplied))return false;
+        var configured=configuration["PUBLIC_BASE_URL"];if(Uri.TryCreate(configured,UriKind.Absolute,out var expected)&&SameAuthority(supplied,expected))return true;
+        if(!context.Request.Host.HasValue||String.IsNullOrWhiteSpace(context.Request.Scheme))return false;var requestOrigin=new UriBuilder(context.Request.Scheme,context.Request.Host.Host,context.Request.Host.Port??-1).Uri;return SameAuthority(supplied,requestOrigin);
+    }
+    private static bool SameAuthority(Uri left,Uri right)=>String.Equals(left.Scheme,right.Scheme,StringComparison.OrdinalIgnoreCase)&&String.Equals(left.Host,right.Host,StringComparison.OrdinalIgnoreCase)&&left.Port==right.Port;
+}
+
 public sealed record TenantMembership(string OrganizationId, OrganizationRole Role);
 
 public static class TenantSecurity

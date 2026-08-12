@@ -62,6 +62,18 @@ public sealed class TenantSecurityTests
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"SAAS_ADMIN_EMAIL","admin@example.test"}}).Build();Assert.True(SaasSecurity.IsAdmin(Context("id","org","admin@example.test").User,config));Assert.False(SaasSecurity.IsAdmin(Context("id","org","user@example.test").User,config));
     }
 
+    [Fact]
+    public void Unsafe_Cross_Site_Request_Is_Rejected_While_Same_Origin_Is_Allowed()
+    {
+        var configuration=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"PUBLIC_BASE_URL","https://seller.example"}}).Build();var cross=new DefaultHttpContext();cross.Request.Method="DELETE";cross.Request.Headers.Origin="https://attacker.example";Assert.False(RequestOriginSecurity.IsAllowed(cross,configuration));var fetch=new DefaultHttpContext();fetch.Request.Method="POST";fetch.Request.Headers["Sec-Fetch-Site"]="cross-site";Assert.False(RequestOriginSecurity.IsAllowed(fetch,configuration));var same=new DefaultHttpContext();same.Request.Method="PUT";same.Request.Headers.Origin="https://seller.example";Assert.True(RequestOriginSecurity.IsAllowed(same,configuration));
+    }
+
+    [Fact]
+    public void Telegram_Webhook_Uses_Separate_Secret_Gate_And_Is_Origin_Exempt()
+    {
+        var context=new DefaultHttpContext();context.Request.Method="POST";context.Request.Path="/api/v1/telegram/webhook";context.Request.Headers.Origin="https://api.telegram.org";Assert.True(RequestOriginSecurity.IsAllowed(context,new ConfigurationBuilder().Build()));
+    }
+
     private static SellerFinanceDbContext CreateDb() => new(new DbContextOptionsBuilder<SellerFinanceDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 

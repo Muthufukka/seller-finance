@@ -60,6 +60,7 @@ app.UseExceptionHandler();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.Use(async(context,next)=>{context.Response.Headers["X-Content-Type-Options"]="nosniff";context.Response.Headers["Referrer-Policy"]="strict-origin-when-cross-origin";context.Response.Headers["Content-Security-Policy"]="default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'";await next();});
+app.Use(async(context,next)=>{if(!RequestOriginSecurity.IsAllowed(context,builder.Configuration)){context.Response.StatusCode=StatusCodes.Status403Forbidden;await context.Response.WriteAsJsonAsync(new{title="Cross-site request rejected"});return;}await next();});
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();

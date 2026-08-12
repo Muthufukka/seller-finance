@@ -13,6 +13,7 @@
 ## Production smoke
 
 The smoke script validates `/api-docs` and `/openapi/v1.json`, checks critical paths in the contract, and rejects known secret/configuration names in the published JSON.
+It also submits an unsafe request with an attacker `Origin` and `Sec-Fetch-Site: cross-site`; production must reject it with HTTP 403 before endpoint execution.
 
 После успешного Render deploy:
 
