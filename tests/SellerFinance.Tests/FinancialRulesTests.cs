@@ -30,6 +30,23 @@ public sealed class FinancialRulesTests
     }
 
     [Fact]
+    public async Task Category_Rule_Overrides_Default_And_Product_Rule_Overrides_Category()
+    {
+        await using var db=CreateDb();SeedOrder(db);db.Products.Local.Single().Category="Home";
+        db.FeeRules.AddRange(Rule(FeeRuleScope.Default,5),new(){Id=Guid.NewGuid(),OrganizationId="org",Scope=FeeRuleScope.Category,Category="Home",ValueType=FeeValueType.Percentage,Value=10,EffectiveFrom=new(2020,1,1),CreatedByUserId="user"});await db.SaveChangesAsync();
+        Assert.Equal(100m,await SummaryValue(db,"MarketplaceFees"));
+        db.FeeRules.Add(Rule(FeeRuleScope.Product,15,"p1"));await db.SaveChangesAsync();
+        Assert.Equal(150m,await SummaryValue(db,"MarketplaceFees"));
+    }
+
+    [Fact]
+    public async Task Rule_Is_Not_Used_After_Its_Effective_End()
+    {
+        await using var db=CreateDb();SeedOrder(db);db.FeeRules.AddRange(Rule(FeeRuleScope.Default,5),new(){Id=Guid.NewGuid(),OrganizationId="org",Scope=FeeRuleScope.Product,ProductId="p1",ValueType=FeeValueType.Percentage,Value=20,EffectiveFrom=new(2026,7,1),EffectiveTo=new(2026,8,1),CreatedByUserId="user"});await db.SaveChangesAsync();
+        Assert.Equal(50m,await SummaryValue(db,"MarketplaceFees"));
+    }
+
+    [Fact]
     public async Task Period_Expense_Reduces_Operating_Profit()
     {
         await using var db=CreateDb();SeedOrder(db);db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Type=ExpenseType.Advertising,Amount=100,Date=new(2026,8,1),CreatedByUserId="user"});await db.SaveChangesAsync();

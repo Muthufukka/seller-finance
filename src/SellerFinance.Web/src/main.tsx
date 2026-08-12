@@ -33,6 +33,7 @@ type Product = {
   directExpenses?: number;
   allocatedOrganizationExpenses?: number;
   productStatus?: "Active" | "Archived";
+  category?: string;
   status: string;
 };
 type Point = { date: string; revenue: number; profit: number };
@@ -1344,7 +1345,10 @@ function Expenses({ session, products, orders }: { session: Session; products: P
 
 function Fees({ session, products }: { session: Session; products: Product[] }) {
   const [rows, setRows] = useState<any[]>([]),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [scope, setScope] = useState("Default"),
+    [endDates, setEndDates] = useState<Record<string, string>>({});
+  const categories = [...new Set(products.map((p) => p.category?.trim()).filter((x): x is string => Boolean(x)))].sort();
   const headers = { "X-Organization-Id": session.organizationId };
   const load = () =>
     fetch("/api/v1/fee-rules", { headers })
@@ -1365,12 +1369,23 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
         valueType: f.get("valueType"),
         value: Number(f.get("value")),
         effectiveFrom: f.get("date"),
-        effectiveTo: null,
+        effectiveTo: f.get("effectiveTo") || null,
         productId: scope === "Product" ? f.get("productId") : null,
-        category: null,
+        category: scope === "Category" ? f.get("category") : null,
       }),
     });
     setMessage(r.ok ? "Правило комиссии создано" : "Проверьте параметры правила");
+    if (r.ok) load();
+  };
+  const endRule = async (id: string) => {
+    const effectiveTo = endDates[id];
+    if (!effectiveTo) return setMessage("Укажите дату окончания правила");
+    const r = await fetch(`/api/v1/fee-rules/${id}/end`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ effectiveTo }),
+    });
+    setMessage(r.ok ? "Период действия правила обновлён" : "Не удалось завершить правило");
     if (r.ok) load();
   };
   return (
@@ -1384,23 +1399,29 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
       </div>
       <article className="entry-card">
         <form className="expense-form" onSubmit={submit}>
-          <select name="scope">
+          <select name="scope" value={scope} onChange={(e) => setScope(e.target.value)}>
             <option value="Default">Для организации</option>
+            <option value="Category">Для категории</option>
             <option value="Product">Для товара</option>
           </select>
-          <select name="productId">
+          {scope === "Product" && <select name="productId" required>
             {products.map((p) => (
               <option value={p.id} key={p.id}>
                 {p.sku}
               </option>
             ))}
-          </select>
+          </select>}
+          {scope === "Category" && <select name="category" required>
+            <option value="">Выберите категорию</option>
+            {categories.map((category) => <option value={category} key={category}>{category}</option>)}
+          </select>}
           <select name="valueType">
             <option value="Percentage">Процент</option>
             <option value="Fixed">Фиксированная сумма</option>
           </select>
           <input name="value" type="number" min="0" step="0.01" placeholder="Значение" required />
           <input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required />
+          <input name="effectiveTo" type="date" aria-label="Действует по" />
           <button className="primary">Создать правило</button>
         </form>
         {message && <p className="integration-message">{message}</p>}
@@ -1412,20 +1433,29 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
             <thead>
               <tr>
                 <th>Область</th>
-                <th>Товар</th>
+                <th>Назначение</th>
                 <th>Тип</th>
                 <th>Значение</th>
                 <th>Действует с</th>
+                <th>Действует по</th>
+                <th>Завершить</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
                   <td>{r.scope}</td>
-                  <td>{products.find((p) => p.id === r.productId)?.sku || "Все товары"}</td>
+                  <td>{r.scope === "Product" ? products.find((p) => p.id === r.productId)?.sku || "Товар удалён" : r.scope === "Category" ? r.category : "Все товары"}</td>
                   <td>{r.valueType}</td>
                   <td>{r.valueType === "Percentage" ? `${r.value}%` : money(r.value)}</td>
                   <td>{new Date(r.effectiveFrom).toLocaleDateString("ru-RU")}</td>
+                  <td>{r.effectiveTo ? new Date(r.effectiveTo).toLocaleDateString("ru-RU") : "Бессрочно"}</td>
+                  <td>
+                    <div className="rule-end">
+                      <input type="date" min={r.effectiveFrom} value={endDates[r.id] || ""} onChange={(e) => setEndDates((x) => ({ ...x, [r.id]: e.target.value }))} />
+                      <button type="button" onClick={() => endRule(r.id)}>Завершить</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
