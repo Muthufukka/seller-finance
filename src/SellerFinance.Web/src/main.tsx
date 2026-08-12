@@ -299,7 +299,7 @@ function periodRange(period: string, customFrom: string, customTo: string) {
 }
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
-  const {t}=useI18n();
+  const {t,locale,setLocale}=useI18n();
   const params = new URLSearchParams(location.search);
   const [register, setRegister] = useState(false),
     [forgot, setForgot] = useState(false),
@@ -348,6 +348,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
   return (
     <div className="auth-page">
       <section className="auth-panel">
+        <select className="language-select auth-language" aria-label="Language" value={locale} onChange={e=>setLocale(e.target.value as "ru"|"kk")}><option value="ru">RU</option><option value="kk">ҚАЗ</option></select>
         <div className="auth-brand">
           <span>
             <WalletCards />
@@ -410,7 +411,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
   );
 }
 function ResetPassword({ email, token }: { email: string; token: string }) {
-  const {t}=useI18n();
+  const {t,locale,setLocale}=useI18n();
   const [message, setMessage] = useState("");
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -425,6 +426,7 @@ function ResetPassword({ email, token }: { email: string; token: string }) {
   return (
     <div className="auth-page">
       <section className="auth-panel">
+        <select className="language-select auth-language" aria-label="Language" value={locale} onChange={e=>setLocale(e.target.value as "ru"|"kk")}><option value="ru">RU</option><option value="kk">ҚАЗ</option></select>
         <h1>{t("reset.title")}</h1>
         <p>{email}</p>
         <form onSubmit={submit}>
