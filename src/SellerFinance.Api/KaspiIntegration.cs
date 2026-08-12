@@ -104,6 +104,9 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
             else {job.Status=SyncJobStatus.RequiresAttention;job.CompletedAt=DateTimeOffset.UtcNow;connection.Status=MarketplaceConnectionStatus.RequiresAttention;connection.LastErrorCode=result.ErrorCode;}
         }
         await db.SaveChangesAsync(ct);
+        var notifications=scope.ServiceProvider.GetRequiredService<NotificationDispatcher>();
+        if(job.Status==SyncJobStatus.RequiresAttention)await notifications.DispatchAsync(job.OrganizationId,NotificationEventType.SyncRequiresAttention,"Seller Finance: синхронизация Kaspi требует внимания.",null,ct);
+        else if(job.Status==SyncJobStatus.Succeeded&&await db.OrderLines.AnyAsync(x=>db.Orders.Any(o=>o.Id==x.OrderId&&o.OrganizationId==job.OrganizationId)&&x.UnitCost==null,ct))await notifications.DispatchAsync(job.OrganizationId,NotificationEventType.MissingCost,"Seller Finance: после синхронизации найдены товары без себестоимости.",null,ct);
     }
 
     private static OrderStatus MapStatus(string value)=>value.ToUpperInvariant() switch { "COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED"=>OrderStatus.Cancelled,_=>OrderStatus.Pending };

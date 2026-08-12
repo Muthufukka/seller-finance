@@ -43,3 +43,8 @@ public static class TokenTools
     public static string CreateToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).Replace('+','-').Replace('/','_').TrimEnd('=');
     public static string Hash(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }
+
+public static class SaasSecurity
+{
+    public static bool IsAdmin(ClaimsPrincipal user,IConfiguration configuration)=>!String.IsNullOrWhiteSpace(configuration["SAAS_ADMIN_EMAIL"])&&String.Equals(user.Identity?.Name,configuration["SAAS_ADMIN_EMAIL"],StringComparison.OrdinalIgnoreCase);
+}

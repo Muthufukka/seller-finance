@@ -1,6 +1,9 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
+using System.Text.Json;
 using SellerFinance.Api;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,6 +38,17 @@ builder.Services.AddHttpClient<KaspiClient>(client =>
 });
 builder.Services.AddHostedService<KaspiSyncWorker>();
 builder.Services.AddScoped<CostImportService>();
+builder.Services.AddScoped<ExportBuilder>();
+builder.Services.AddHostedService<ExportWorker>();
+builder.Services.AddHttpClient<TelegramClient>(client=>client.Timeout=TimeSpan.FromSeconds(15));
+builder.Services.AddSingleton<NotificationDispatcher>();
+builder.Services.AddRateLimiter(options=>
+{
+    options.AddFixedWindowLimiter("auth",o=>{o.PermitLimit=10;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
+    options.AddFixedWindowLimiter("sensitive",o=>{o.PermitLimit=6;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
+    options.RejectionStatusCode=429;
+});
+builder.Services.AddOpenApi();
 
 var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
@@ -42,12 +56,18 @@ await using (var scope = app.Services.CreateAsyncScope())
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.Use(async(context,next)=>{context.Response.Headers["X-Content-Type-Options"]="nosniff";context.Response.Headers["Referrer-Policy"]="strict-origin-when-cross-origin";context.Response.Headers["Content-Security-Policy"]="default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'";await next();});
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapGet("/health", () => Results.Ok(new { status="healthy", service="SellerFinance.Api" }));
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
     ? Results.Ok(new { status="healthy", provider="PostgreSQL" })
     : Results.Problem("Database connection failed", statusCode:503));
+app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])?Results.Ok(new{status="ready",database="healthy",encryption="configured"}):Results.Problem("Service is not ready",statusCode:503));
+if(app.Environment.IsDevelopment()||builder.Configuration.GetValue<bool>("ENABLE_OPENAPI"))app.MapOpenApi();
+app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDbContext db)=>{var hash=TokenTools.Hash(token);var job=await db.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.DownloadTokenHash==hash&&x.Status==ExportJobStatus.Succeeded&&x.ExpiresAt>DateTimeOffset.UtcNow&&x.FileContent!=null);return job is null?Results.NotFound():Results.File(job.FileContent!,job.ContentType!,job.FileName);}).RequireRateLimiting("sensitive");
+app.MapPost("/api/v1/telegram/webhook/{secret}",async(string secret,HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 
 var auth = app.MapGroup("/api/v1/auth");
 auth.MapPost("/register", async (RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
@@ -64,7 +84,7 @@ auth.MapPost("/register", async (RegisterRequest request, UserManager<AppUser> u
     await db.SaveChangesAsync();
     await signIn.SignInAsync(user, isPersistent:true);
     return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
-});
+}).RequireRateLimiting("auth");
 auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
@@ -73,14 +93,14 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
     db.AuditLogs.Add(new() { Id=Guid.NewGuid(), UserId=user.Id, Action="auth.login", EntityType="User", EntityId=user.Id });
     await db.SaveChangesAsync();
     return Results.Ok(new { status="authenticated" });
-});
+}).RequireRateLimiting("auth");
 auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
 auth.MapPost("/forgot-password", async (ForgotPasswordRequest request, UserManager<AppUser> users) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
     if (user is not null) _ = await users.GeneratePasswordResetTokenAsync(user);
     return Results.Ok(new { message="Если аккаунт существует, инструкция будет отправлена на email." });
-});
+}).RequireRateLimiting("auth");
 auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users) =>
 {
     var user=await users.FindByEmailAsync(request.Email.Trim());
@@ -104,7 +124,7 @@ api.MapGet("/session", async (HttpContext ctx, SellerFinanceDbContext db) =>
 {
     var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==ctx.Tenant());
     var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==ctx.User.FindFirstValue(ClaimTypes.NameIdentifier));
-    return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name, role=ctx.Membership().Role.ToString(), plan="Trial" });
+    return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name, role=ctx.Membership().Role.ToString(), plan=organization.Plan.ToString(), trialEndsAt=organization.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
 });
 api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext db) =>
 {
@@ -116,12 +136,13 @@ api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, In
     if (id!=ctx.Tenant()) return Results.NotFound();
     if (!ctx.Membership().CanManageMembers()) return Results.Forbid();
     if (!Enum.TryParse<OrganizationRole>(request.Role,true,out var role) || role==OrganizationRole.Owner) return Results.BadRequest(new { title="Недопустимая роль" });
+    var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==id);var memberLimit=organization.Plan switch{SubscriptionPlan.Trial=>2,SubscriptionPlan.Start=>3,SubscriptionPlan.Pro=>10,_=>100};var members=await db.OrganizationUsers.CountAsync(x=>x.OrganizationId==id&&x.JoinedAt!=null);if(members>=memberLimit)return Results.Problem("Достигнут лимит пользователей тарифа",statusCode:402);
     var token=TokenTools.CreateToken();
     db.OrganizationInvitations.Add(new() { Id=Guid.NewGuid(), OrganizationId=id, Email=request.Email.Trim().ToLowerInvariant(), Role=role, TokenHash=TokenTools.Hash(token), InvitedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!, ExpiresAt=DateTimeOffset.UtcNow.AddDays(7) });
     AuditWriter.Add(db,ctx,"member.invited","OrganizationInvitation",metadataSafe:$"{{\"role\":\"{role}\"}}");
     await db.SaveChangesAsync();
     return Results.Ok(new { invitationToken=token, expiresInDays=7 });
-});
+}).RequireRateLimiting("sensitive");
 api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationRequest request, SellerFinanceDbContext db) =>
 {
     var invitation=await db.OrganizationInvitations.SingleOrDefaultAsync(x=>x.TokenHash==TokenTools.Hash(request.Token)&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow);
@@ -159,6 +180,20 @@ api.MapPost("/expenses",async(HttpContext c,ExpenseRequest request,SellerFinance
     if(!c.Membership().CanWrite())return Results.Forbid();if(!Enum.TryParse<ExpenseType>(request.Type,true,out var type)||request.Amount<=0)return Results.BadRequest(new{title="Проверьте тип и сумму расхода"});if(request.ProductId is not null&&!await db.Products.AnyAsync(x=>x.Id==request.ProductId&&x.OrganizationId==c.Tenant()))return Results.NotFound();if(request.OrderId is not null&&!await db.Orders.AnyAsync(x=>x.Id==request.OrderId&&x.OrganizationId==c.Tenant()))return Results.NotFound();var expense=new ExpenseEntity{Id=Guid.NewGuid(),OrganizationId=c.Tenant(),Type=type,Amount=request.Amount,Date=request.Date,ProductId=request.ProductId,OrderId=request.OrderId,Comment=request.Comment?.Trim(),CreatedByUserId=c.User.FindFirstValue(ClaimTypes.NameIdentifier)!};db.Expenses.Add(expense);AuditWriter.Add(db,c,"expense.created","Expense",expense.Id.ToString());await db.SaveChangesAsync();return Results.Created($"/api/v1/expenses/{expense.Id}",new{expense.Id});
 });
 api.MapDelete("/expenses/{id:guid}",async(HttpContext c,Guid id,SellerFinanceDbContext db)=>{if(!c.Membership().CanWrite())return Results.Forbid();var expense=await db.Expenses.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==c.Tenant());if(expense is null)return Results.NotFound();db.Expenses.Remove(expense);AuditWriter.Add(db,c,"expense.deleted","Expense",id.ToString());await db.SaveChangesAsync();return Results.NoContent();});
+api.MapPost("/exports",async(HttpContext c,ExportRequest request,SellerFinanceDbContext db)=>
+{
+    if(!c.Membership().CanWrite())return Results.Forbid();var report=request.ReportType.Trim();if(report.ToLowerInvariant() is not("products" or "orders" or "missingcosts" or "abc")||request.Format.ToLowerInvariant() is not("csv" or "xlsx"))return Results.BadRequest(new{title="Неизвестный отчёт или формат"});var token=TokenTools.CreateToken();var job=new ExportJobEntity{Id=Guid.NewGuid(),OrganizationId=c.Tenant(),CreatedByUserId=c.User.FindFirstValue(ClaimTypes.NameIdentifier)!,ReportType=report,Format=request.Format.ToLowerInvariant(),DateFrom=request.DateFrom,DateTo=request.DateTo,DownloadTokenHash=TokenTools.Hash(token)};db.ExportJobs.Add(job);AuditWriter.Add(db,c,"export.queued","ExportJob",job.Id.ToString(),$"{{\"report\":\"{report}\",\"format\":\"{job.Format}\"}}");await db.SaveChangesAsync();return Results.Accepted($"/api/v1/exports/{job.Id}",new{job.Id,status=job.Status.ToString(),downloadToken=token,job.ExpiresAt});
+}).RequireRateLimiting("sensitive");
+api.MapGet("/exports/{id:guid}",async(HttpContext c,Guid id,SellerFinanceDbContext db)=>{var job=await db.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==c.Tenant());return job is null?Results.NotFound():Results.Ok(new{job.Id,status=job.Status.ToString(),job.RowCount,job.FileName,job.ExpiresAt,job.ErrorCode});});
+api.MapGet("/telegram",async(HttpContext c,SellerFinanceDbContext db,TelegramClient telegram)=>{var connection=await db.TelegramConnections.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==c.Tenant());var rules=await db.NotificationRules.AsNoTracking().Where(x=>x.OrganizationId==c.Tenant()).Select(x=>new{x.Id,eventType=x.EventType.ToString(),x.Enabled,x.Threshold}).ToArrayAsync();return Results.Ok(new{configured=telegram.IsConfigured,status=connection?.Status??"NotLinked",connection?.LinkedAt,rules});});
+api.MapPost("/telegram/link",async(HttpContext c,SellerFinanceDbContext db,IConfiguration config,TelegramClient telegram)=>
+{
+    if(!c.Membership().CanManageMembers())return Results.Forbid();if(!telegram.IsConfigured)return Results.Problem("Telegram bot не настроен администратором SaaS",statusCode:503);var code=TokenTools.CreateToken()[..12];var connection=await db.TelegramConnections.SingleOrDefaultAsync(x=>x.OrganizationId==c.Tenant());if(connection is null){connection=new(){Id=Guid.NewGuid(),OrganizationId=c.Tenant()};db.TelegramConnections.Add(connection);}connection.LinkCodeHash=TokenTools.Hash(code);connection.LinkCodeExpiresAt=DateTimeOffset.UtcNow.AddMinutes(15);connection.Status="Pending";connection.ChatId=null;AuditWriter.Add(db,c,"telegram.link.started","TelegramConnection",connection.Id.ToString());await db.SaveChangesAsync();var username=config["TELEGRAM_BOT_USERNAME"];return Results.Ok(new{code,expiresInMinutes=15,deepLink=String.IsNullOrWhiteSpace(username)?null:$"https://t.me/{username}?start={code}"});
+}).RequireRateLimiting("sensitive");
+api.MapPost("/telegram/test",async(HttpContext c,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{var connection=await db.TelegramConnections.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==c.Tenant()&&x.Status=="Active"&&x.ChatId!=null,ct);if(connection is null)return Results.Conflict(new{title="Telegram не связан"});return await telegram.SendAsync(connection.ChatId!.Value,"Тест Seller Finance: уведомления работают.",ct)?Results.Ok(new{sent=true}):Results.Problem("Telegram API недоступен",statusCode:503);}).RequireRateLimiting("sensitive");
+api.MapPut("/telegram/rules/{eventType}",async(HttpContext c,string eventType,NotificationRuleRequest request,SellerFinanceDbContext db)=>{if(!c.Membership().CanWrite())return Results.Forbid();if(!Enum.TryParse<NotificationEventType>(eventType,true,out var type))return Results.BadRequest(new{title="Неизвестное событие"});var rule=await db.NotificationRules.SingleOrDefaultAsync(x=>x.OrganizationId==c.Tenant()&&x.EventType==type);if(rule is null){rule=new(){Id=Guid.NewGuid(),OrganizationId=c.Tenant(),EventType=type};db.NotificationRules.Add(rule);}rule.Enabled=request.Enabled;rule.Threshold=request.Threshold;await db.SaveChangesAsync();return Results.Ok(new{rule.Id});});
+api.MapGet("/admin/organizations",async(HttpContext c,SellerFinanceDbContext db,IConfiguration config)=>SaasSecurity.IsAdmin(c.User,config)?Results.Ok(await db.Organizations.AsNoTracking().Select(x=>new{x.Id,x.Name,plan=x.Plan.ToString(),x.Status,x.CreatedAt,x.TrialEndsAt,lastSync=db.MarketplaceConnections.Where(m=>m.OrganizationId==x.Id).Select(m=>m.LastSuccessfulSyncAt).FirstOrDefault()}).ToArrayAsync()):Results.Forbid());
+api.MapPut("/admin/organizations/{id}/plan",async(HttpContext c,string id,AdminPlanRequest request,SellerFinanceDbContext db,IConfiguration config)=>{if(!SaasSecurity.IsAdmin(c.User,config))return Results.Forbid();if(!Enum.TryParse<SubscriptionPlan>(request.Plan,true,out var plan))return Results.BadRequest(new{title="Неизвестный тариф"});var organization=await db.Organizations.SingleOrDefaultAsync(x=>x.Id==id);if(organization is null)return Results.NotFound();organization.Plan=plan;if(request.Status is not null)organization.Status=request.Status;AuditWriter.Add(db,c,"saas.plan.changed","Organization",id,$"{{\"plan\":\"{plan}\"}}");await db.SaveChangesAsync();return Results.NoContent();});
 api.MapGet("/kaspi/connection", async (HttpContext ctx,SellerFinanceDbContext db) =>
 {
     var connection=await db.MarketplaceConnections.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi");
@@ -247,4 +282,7 @@ record KaspiConnectionRequest(string Token);
 record FeeRuleRequest(string Scope,string ValueType,decimal Value,DateOnly EffectiveFrom,DateOnly? EffectiveTo,string? ProductId,string? Category);
 record ActualFeeRequest(decimal Amount,string? Source);
 record ExpenseRequest(string Type,decimal Amount,DateOnly Date,string? ProductId,string? OrderId,string? Comment);
+record ExportRequest(string ReportType,string Format,DateOnly? DateFrom,DateOnly? DateTo);
+record NotificationRuleRequest(bool Enabled,decimal? Threshold);
+record AdminPlanRequest(string Plan,string? Status);
 public partial class Program { }

@@ -1,58 +1,83 @@
 # Seller Finance
 
-Рабочий vertical-slice MVP SaaS-сервиса финансовой аналитики для продавцов Kaspi Магазина. Проект реализует ключевую идею ТЗ: продавец быстро видит прибыль, маржу и качество исходных данных, а финансовые показатели можно разложить до товара и заказа.
+Pilot-ready multi-tenant SaaS для управленческой аналитики продавцов Kaspi Магазина. Backend — ASP.NET Core 10, frontend — React/Vite, БД — PostgreSQL.
 
-## Что уже реализовано
+## Возможности
 
-- адаптивный React dashboard с KPI, динамикой, Coverage и проблемами данных;
-- раздел товаров и навигационные заготовки заказов/ABC;
-- ASP.NET Core API с префиксом `/api/v1`;
-- обязательный tenant-заголовок `X-Organization-Id` и закрытие неизвестного tenant;
-- расчёт Revenue, COGS, fees, delivery, contribution/operating profit и Coverage только в `decimal`;
-- корректное исключение RETURNED/CANCELLED из факта и отсутствие подстановки `cost = 0`;
-- точное распределение доставки по выручке строк;
-- безопасные demo-endpoints проверки токена и постановки синхронизации в очередь;
-- unit-тесты критических кейсов FIN-01, FIN-02, FIN-04 и распределения доставки.
+- Identity cookie auth, организации, Owner/Admin/Analyst/Viewer и tenant isolation;
+- зашифрованное AES-256-GCM подключение Kaspi, фоновые sync jobs и UPSERT заказов;
+- история себестоимости, ручное изменение и CSV/XLSX preview-confirm import;
+- версионные комиссии, фактические удержания, доставка и расходы;
+- dashboard, товары, заказы, ABC 80/15/5 и drill-down расчёта;
+- фоновые CSV UTF-8/XLSX exports с временной ссылкой;
+- Telegram linking и правила уведомлений;
+- Trial/Start/Pro/Business, лимиты и SaaS Admin;
+- audit log, rate limiting, security headers и health/readiness probes.
 
 ## Локальный запуск
 
-Требования: .NET SDK 10, Node.js 22+ и pnpm.
-
-В первом терминале:
+Требования: .NET SDK 10, Node.js 24+, PostgreSQL.
 
 ```powershell
-dotnet run --project src/SellerFinance.Api --urls http://localhost:5068
+$env:DATABASE_URL='postgresql://postgres:postgres@localhost:5432/seller_finance'
+$env:TOKEN_ENCRYPTION_KEY='<base64-encoded 32-byte key>'
+dotnet run --project src/SellerFinance.Api
 ```
 
-Во втором терминале:
+Для frontend-разработки:
 
 ```powershell
 cd src/SellerFinance.Web
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Откройте `http://localhost:5173`. Frontend обращается к API через Vite proxy. Demo tenant: `demo-organization`.
+Миграции применяются приложением при старте. Создание новой миграции:
+
+```powershell
+dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project src/SellerFinance.Api
+```
+
+## Переменные окружения
+
+Обязательные:
+
+- `DATABASE_URL` — PostgreSQL connection URL;
+- `TOKEN_ENCRYPTION_KEY` — случайный 32-байтовый ключ в Base64. Не менять после сохранения Kaspi token без процедуры re-encryption.
+
+Опциональные:
+
+- `SAAS_ADMIN_EMAIL` — email администратора SaaS;
+- `TELEGRAM_BOT_TOKEN` — token от BotFather;
+- `TELEGRAM_BOT_USERNAME` — имя бота без `@`;
+- `TELEGRAM_WEBHOOK_SECRET` — случайный секрет URL webhook;
+- `ENABLE_OPENAPI=true` — включает `/openapi/v1.json` вне Development.
+
+Секреты задаются только в Render Environment и не добавляются в Git или сообщения.
 
 ## Проверка
 
 ```powershell
-dotnet test tests/SellerFinance.Tests/SellerFinance.Tests.csproj
+dotnet test SellerFinance.slnx
 cd src/SellerFinance.Web
 pnpm build
 ```
 
-## Публикация на Render
+Production probes:
 
-В репозитории есть `render.yaml`. После загрузки проекта в GitHub выберите в Render **New → Blueprint**, подключите репозиторий и примените найденный Blueprint. Render соберёт React и ASP.NET Core в один Docker-контейнер и выдаст публичный HTTPS-адрес.
+- `/health` — процесс приложения;
+- `/health/database` — PostgreSQL;
+- `/health/ready` — БД и ключ шифрования.
 
-## Структура
+## Подключение Kaspi
 
-- `src/SellerFinance.Domain` — финансовая модель и расчёты без привязки к инфраструктуре;
-- `src/SellerFinance.Api` — REST API и demo-store для первого запуска;
-- `src/SellerFinance.Web` — React + TypeScript интерфейс;
-- `tests/SellerFinance.Tests` — критические финансовые сценарии.
+1. В кабинете Kaspi откройте **Настройки → Токен API → Сформировать**.
+2. В Seller Finance откройте **Интеграции**.
+3. Вставьте token в форму. Он проверяется запросом к официальному API и сохраняется только зашифрованным.
+4. Запустите синхронизацию. Повторный запуск обновляет существующие external order IDs.
 
-## Следующий production-этап
+## Production
 
-Demo-store нужно заменить на PostgreSQL + EF Core migrations; добавить ASP.NET Core Identity, роли OrganizationUsers, AES-256-GCM/envelope encryption токена, durable background jobs, Kaspi adapter с подтверждёнными официальными контрактами, импорт XLSX/CSV с preview, audit log и object storage. Реальный Kaspi token не должен добавляться в Git или логи.
+Render собирает React и API одним Dockerfile. Подробные процедуры находятся в [production runbook](docs/production-runbook.md), архитектура и ERD — в [architecture](docs/architecture.md).
+
+Перед реальными данными продавцов необходимо использовать долгоживущую БД в Казахстане, пройти правовую проверку и заменить ранее раскрытые credentials.

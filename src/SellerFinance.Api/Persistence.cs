@@ -24,6 +24,9 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<FeeRuleEntity> FeeRules => Set<FeeRuleEntity>();
     public DbSet<ActualFeeEntity> ActualFees => Set<ActualFeeEntity>();
     public DbSet<ExpenseEntity> Expenses => Set<ExpenseEntity>();
+    public DbSet<ExportJobEntity> ExportJobs => Set<ExportJobEntity>();
+    public DbSet<TelegramConnectionEntity> TelegramConnections => Set<TelegramConnectionEntity>();
+    public DbSet<NotificationRuleEntity> NotificationRules => Set<NotificationRuleEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -67,7 +70,63 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<ExpenseEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ExpenseEntity>().Property(x => x.Amount).HasPrecision(19,4);
         modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.Date });
+        modelBuilder.Entity<ExportJobEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<ExportJobEntity>().HasIndex(x => x.DownloadTokenHash).IsUnique();
+        modelBuilder.Entity<ExportJobEntity>().HasIndex(x => new { x.Status, x.CreatedAt });
+        modelBuilder.Entity<TelegramConnectionEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<TelegramConnectionEntity>().HasIndex(x => x.OrganizationId).IsUnique();
+        modelBuilder.Entity<TelegramConnectionEntity>().HasIndex(x => x.LinkCodeHash).IsUnique();
+        modelBuilder.Entity<NotificationRuleEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<NotificationRuleEntity>().Property(x => x.Threshold).HasPrecision(19,4);
+        modelBuilder.Entity<NotificationRuleEntity>().HasIndex(x => new { x.OrganizationId, x.EventType }).IsUnique();
     }
+}
+
+public enum ExportJobStatus { Queued, Running, Succeeded, Failed, Expired }
+public enum SubscriptionPlan { Trial, Start, Pro, Business }
+public enum NotificationEventType { MissingCost, NegativeMargin, SyncRequiresAttention }
+
+public sealed class ExportJobEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string CreatedByUserId { get; set; } = "";
+    public string ReportType { get; set; } = "Products";
+    public string Format { get; set; } = "xlsx";
+    public DateOnly? DateFrom { get; set; }
+    public DateOnly? DateTo { get; set; }
+    public ExportJobStatus Status { get; set; } = ExportJobStatus.Queued;
+    public int RowCount { get; set; }
+    public byte[]? FileContent { get; set; }
+    public string? ContentType { get; set; }
+    public string? FileName { get; set; }
+    public string DownloadTokenHash { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+    public DateTimeOffset? CompletedAt { get; set; }
+    public string? ErrorCode { get; set; }
+}
+
+public sealed class TelegramConnectionEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string LinkCodeHash { get; set; } = "";
+    public long? ChatId { get; set; }
+    public string Status { get; set; } = "Pending";
+    public DateTimeOffset LinkCodeExpiresAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LinkedAt { get; set; }
+}
+
+public sealed class NotificationRuleEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public NotificationEventType EventType { get; set; }
+    public bool Enabled { get; set; } = true;
+    public decimal? Threshold { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public enum FeeRuleScope { Default, Category, Product }
@@ -248,6 +307,10 @@ public sealed class OrganizationEntity
     public string Name { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Almaty";
     public string Currency { get; set; } = "KZT";
+    public SubscriptionPlan Plan { get; set; } = SubscriptionPlan.Trial;
+    public string Status { get; set; } = "Active";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset TrialEndsAt { get; set; } = DateTimeOffset.UtcNow.AddDays(14);
 }
 
 public sealed class ProductEntity

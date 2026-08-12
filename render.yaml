@@ -13,3 +13,11 @@ services:
         value: http://0.0.0.0:10000
       - key: TOKEN_ENCRYPTION_KEY
         generateValue: true
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: SAAS_ADMIN_EMAIL
+        sync: false
