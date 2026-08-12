@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Npgsql;
 using SellerFinance.Domain;
+using System.Text.Json;
 
 namespace SellerFinance.Api;
 
@@ -590,6 +591,16 @@ public static class DbAnalytics
             var orders=groups.GetValueOrDefault(date)?.ToArray()??[];var expenses=directByDay.GetValueOrDefault(date)+allocatedByDay.GetValueOrDefault(date);var result=FinanceCalculator.Calculate(orders,expenses);var lines=orders.SelectMany(x=>x.Lines).ToArray();
             return(object)new{date,units=lines.Sum(x=>x.Quantity),result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,otherVariableCosts=result.VariableCosts-result.MarketplaceFees-result.Delivery,expenses,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,result.IsPreliminary};
         }).ToArray();
+    }
+
+    public static async Task<object> DashboardProblemsAsync(SellerFinanceDbContext db,string tenant,DateOnly? from=null,DateOnly? to=null)
+    {
+        var products=(await ProductsAsync(db,tenant,from,to)).Select(x=>JsonSerializer.SerializeToElement(x)).ToArray();
+        var active=products.Where(x=>!String.Equals(x.GetProperty("productStatus").GetString(),"Archived",StringComparison.OrdinalIgnoreCase)).ToArray();
+        var missingAll=active.Where(x=>x.GetProperty("revenue").GetDecimal()>0&&x.GetProperty("coveragePct").GetDecimal()<100m).OrderByDescending(x=>x.GetProperty("revenue").GetDecimal()).ToArray();var missing=missingAll.Take(10).Select(x=>new{id=x.GetProperty("id").GetString(),sku=x.GetProperty("sku").GetString(),name=x.GetProperty("name").GetString(),revenue=x.GetProperty("revenue").GetDecimal(),coveragePct=x.GetProperty("coveragePct").GetDecimal()}).ToArray();
+        var negativeAll=active.Where(x=>x.GetProperty("profit").ValueKind==JsonValueKind.Number&&x.GetProperty("profit").GetDecimal()<0).OrderBy(x=>x.GetProperty("profit").GetDecimal()).ToArray();var negative=negativeAll.Take(10).Select(x=>new{id=x.GetProperty("id").GetString(),sku=x.GetProperty("sku").GetString(),name=x.GetProperty("name").GetString(),profit=x.GetProperty("profit").GetDecimal(),margin=x.GetProperty("margin").ValueKind==JsonValueKind.Number?x.GetProperty("margin").GetDecimal():(decimal?)null}).ToArray();
+        var syncQuery=from job in db.SyncJobs.AsNoTracking() join connection in db.MarketplaceConnections.AsNoTracking() on job.MarketplaceConnectionId equals connection.Id where job.OrganizationId==tenant&&connection.OrganizationId==tenant&&job.Status==SyncJobStatus.RequiresAttention select new{job.Id,connectionId=connection.Id,storeName=connection.DisplayName,errorCode=job.ErrorCode??connection.LastErrorCode,job.CreatedAt};var syncCount=await syncQuery.CountAsync();var sync=await syncQuery.OrderByDescending(x=>x.CreatedAt).Take(10).ToArrayAsync();
+        return new{missingCosts=missing,negativeMargins=negative,syncIssues=sync,missingCostCount=missingAll.Length,negativeMarginCount=negativeAll.Length,syncIssueCount=syncCount,totalCount=missingAll.Length+negativeAll.Length+syncCount};
     }
 
     public static async Task<object> OrdersAsync(SellerFinanceDbContext db, string tenant, string? status=null,

@@ -37,6 +37,15 @@ type Product = {
 };
 type Point = { date: string; revenue: number; profit: number };
 type ProductPoint = { date: string; units: number; revenue: number; cogs: number | null; marketplaceFees: number; delivery: number; otherVariableCosts: number; expenses: number; operatingProfit: number; operatingMarginPct: number | null; coveragePct: number; isPreliminary: boolean };
+type DashboardProblems = {
+  missingCosts: { id: string; sku: string; name: string; revenue: number; coveragePct: number }[];
+  negativeMargins: { id: string; sku: string; name: string; profit: number; margin: number | null }[];
+  syncIssues: { id: string; connectionId: string; storeName: string; errorCode?: string; createdAt: string }[];
+  missingCostCount?: number;
+  negativeMarginCount?: number;
+  syncIssueCount?: number;
+  totalCount: number;
+};
 type Page = "dashboard" | "products" | "orders" | "abc" | "integrations" | "expenses" | "fees" | "exports" | "settings" | "admin";
 type Session = {
   userId: string;
@@ -158,6 +167,8 @@ function App() {
     [products, setProducts] = useState(fallback.products),
     [points, setPoints] = useState(fallback.timeseries);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [focusedProductId,setFocusedProductId]=useState<string>();
+  const [dashboardProblems, setDashboardProblems] = useState<DashboardProblems>({missingCosts:[],negativeMargins:[],syncIssues:[],totalCount:0});
   useEffect(() => {
     fetch("/api/v1/session")
       .then(async (r) => (r.ok ? setSession(await r.json()) : setSession(null)))
@@ -188,12 +199,13 @@ function App() {
     if (!range) return;
     const query = `?dateFrom=${range.from}&dateTo=${range.to}&completeCostsOnly=${completeCostsOnly}`;
     setLoading(true);
-    Promise.all([fetch("/api/v1/analytics/summary" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/products" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/timeseries" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/orders", { headers }).then((r) => (r.ok ? r.json() : Promise.reject()))])
-      .then(([s, p, t, o]) => {
+    Promise.all([fetch("/api/v1/analytics/summary" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/products" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/timeseries" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/orders", { headers }).then((r) => (r.ok ? r.json() : Promise.reject())),fetch("/api/v1/analytics/problems"+query,{headers}).then(r=>r.ok?r.json():Promise.reject())])
+      .then(([s, p, t, o, problems]) => {
         setSummary(s);
         setProducts(p);
         setPoints(t);
         setOrders(o.items ?? o);
+        setDashboardProblems(problems);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -237,8 +249,8 @@ function App() {
             </button>
           </div>
         </header>
-        {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} />}
-        {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
+        {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} problems={dashboardProblems} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} onNavigate={navigate} onProduct={(id)=>{setFocusedProductId(id);navigate("products")}} />}
+        {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} openProductId={focusedProductId} />}
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} />}
         {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "integrations" && <KaspiConnections session={session} />}
@@ -483,9 +495,11 @@ function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: bo
   );
 }
 
-function Dashboard({ summary, products, points, loading, period, onPeriod, customFrom, customTo, onCustomFrom, onCustomTo, completeCostsOnly, onCompleteCostsOnly }: { summary: Summary; products: Product[]; points: Point[]; loading: boolean; period: string; onPeriod: (value: string) => void; customFrom: string; customTo: string; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void; completeCostsOnly: boolean; onCompleteCostsOnly: (value: boolean) => void }) {
-  const max = Math.max(1, ...points.map((x) => x.revenue));
-  const problems = products.filter((x) => x.cost === null);
+function Dashboard({ summary, products, points, problems, loading, period, onPeriod, customFrom, customTo, onCustomFrom, onCustomTo, completeCostsOnly, onCompleteCostsOnly, onNavigate, onProduct }: { summary: Summary; products: Product[]; points: Point[]; problems: DashboardProblems; loading: boolean; period: string; onPeriod: (value: string) => void; customFrom: string; customTo: string; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void; completeCostsOnly: boolean; onCompleteCostsOnly: (value: boolean) => void; onNavigate:(page:Page)=>void; onProduct:(id:string)=>void }) {
+  const [topMode,setTopMode]=useState<"profit"|"loss">("profit");
+  const max = Math.max(1, ...points.flatMap((x) => [Math.abs(x.revenue),Math.abs(x.profit)]));
+  const topProfit=products.filter(x=>x.profit!==null&&x.profit>0).sort((a,b)=>(b.profit??0)-(a.profit??0)).slice(0,10);
+  const topLoss=products.filter(x=>x.profit!==null&&x.profit<0).sort((a,b)=>(a.profit??0)-(b.profit??0)).slice(0,10);
   return (
     <section className="content">
       <div className="title-row">
@@ -570,7 +584,7 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
             {points.map((p) => (
               <div className="bar-col" key={p.date}>
                 <div className="bars">
-                  <i className="profit-bar" style={{ height: `${(p.profit / max) * 100}%` }} />
+                  <i className={`profit-bar ${p.profit < 0 ? "negative" : ""}`} style={{ height: `${(Math.abs(p.profit) / max) * 100}%` }} />
                   <i className="revenue-bar" style={{ height: `${(p.revenue / max) * 100}%` }} />
                 </div>
                 <small>
@@ -604,9 +618,9 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
             </div>
           </div>
           <p>
-            <i /> {problems.length} товар требует внимания
+            <i /> {problems.totalCount} проблем требует внимания
           </p>
-          <button>
+          <button onClick={() => onNavigate("products")}>
             Проверить товары <span>→</span>
           </button>
         </article>
@@ -615,12 +629,12 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
         <article className="table-card">
           <div className="card-head">
             <div>
-              <h2>Товары по прибыли</h2>
+              <h2>{topMode === "profit" ? "TOP-10 по прибыли" : "TOP-10 по убытку"}</h2>
               <p>За выбранный период</p>
             </div>
-            <button>Все товары →</button>
+            <div className="top-switch"><button className={topMode==="profit"?"active":""} onClick={()=>setTopMode("profit")}>Прибыль</button><button className={topMode==="loss"?"active":""} onClick={()=>setTopMode("loss")}>Убыток</button><button onClick={()=>onNavigate("products")}>Все →</button></div>
           </div>
-          <ProductTable products={products.slice(0, 4)} />
+          <ProductTable products={topMode === "profit" ? topProfit : topLoss} onSelect={(product)=>onProduct(product.id)} />
         </article>
         <article className="problems">
           <div className="card-head">
@@ -628,9 +642,9 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
               <h2>Требует внимания</h2>
               <p>Что мешает точному расчёту</p>
             </div>
-            <span>{problems.length}</span>
+            <span>{problems.totalCount}</span>
           </div>
-          {problems.map((p) => (
+          {problems.missingCosts.map((p) => (
             <div className="problem" key={p.id}>
               <PackageSearch />
               <div>
@@ -639,17 +653,12 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
                   {p.name} · {p.sku}
                 </span>
               </div>
-              <button>Добавить</button>
+              <button onClick={()=>onProduct(p.id)}>Добавить</button>
             </div>
           ))}
-          <div className="problem warning">
-            <TrendingDown />
-            <div>
-              <b>Маржа снизилась</b>
-              <span>Набор косметичек · −4,1 п.п.</span>
-            </div>
-            <button>Открыть</button>
-          </div>
+          {problems.negativeMargins.map((p) => <div className="problem warning" key={`margin-${p.id}`}><TrendingDown/><div><b>Отрицательная маржа</b><span>{p.name} · {pct(p.margin)} · {money(p.profit)}</span></div><button onClick={()=>onProduct(p.id)}>Открыть</button></div>)}
+          {problems.syncIssues.map((issue) => <div className="problem sync-warning" key={`sync-${issue.id}`}><RefreshCw/><div><b>Ошибка синхронизации</b><span>{issue.storeName} · {issue.errorCode || "Требуется проверка"}</span></div><button onClick={()=>onNavigate("integrations")}>Проверить</button></div>)}
+          {!problems.totalCount&&<p className="no-problems">Проблем за выбранный период нет.</p>}
         </article>
       </div>
     </section>
@@ -1779,7 +1788,7 @@ function AdminPage({ session }: { session: Session }) {
     </section>
   );
 }
-function ProductTable({ products }: { products: Product[] }) {
+function ProductTable({ products, onSelect }: { products: Product[]; onSelect?:(product:Product)=>void }) {
   return (
     <div className="table-wrap">
       <table>
@@ -1793,7 +1802,7 @@ function ProductTable({ products }: { products: Product[] }) {
         </thead>
         <tbody>
           {products.map((p) => (
-            <tr key={p.id}>
+            <tr key={p.id} onClick={()=>onSelect?.(p)}>
               <td>
                 <span className="product-icon">{p.name[0]}</span>
                 <div>
@@ -1813,7 +1822,7 @@ function ProductTable({ products }: { products: Product[] }) {
     </div>
   );
 }
-function Products({ products, session, dateFrom, dateTo }: { products: Product[]; session: Session; dateFrom?: string; dateTo?: string }) {
+function Products({ products, session, dateFrom, dateTo, openProductId }: { products: Product[]; session: Session; dateFrom?: string; dateTo?: string; openProductId?:string }) {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [sort, setSort] = useState("name-asc"),
@@ -1841,6 +1850,7 @@ function Products({ products, session, dateFrom, dateTo }: { products: Product[]
     else setMessage("Не удалось загрузить динамику товара");
     setSeriesLoading(false);
   };
+  useEffect(()=>{if(!openProductId)return;const product=normalized.find(p=>p.id===openProductId);if(product)open(product);},[openProductId]);
   const upload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;

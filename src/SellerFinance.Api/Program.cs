@@ -187,6 +187,7 @@ api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db
 api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,bool completeCostsOnly=false) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant(),dateFrom,dateTo,completeCostsOnly)));
 api.MapGet("/analytics/products", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,bool completeCostsOnly=false) => Results.Ok(await DbAnalytics.ProductsAsync(db,c.Tenant(),dateFrom,dateTo,completeCostsOnly)));
 api.MapGet("/analytics/abc",async(HttpContext c,SellerFinanceDbContext db,string? metric,DateOnly? dateFrom,DateOnly? dateTo,bool completeCostsOnly=false)=>Results.Ok(await DbAnalytics.AbcAsync(db,c.Tenant(),metric??"profit",dateFrom,dateTo,completeCostsOnly)));
+api.MapGet("/analytics/problems",async(HttpContext c,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo)=>(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)?Results.BadRequest(new{title="dateFrom cannot be later than dateTo"}):Results.Ok(await DbAnalytics.DashboardProblemsAsync(db,c.Tenant(),dateFrom,dateTo)));
 api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db,string? status,DateOnly? dateFrom,DateOnly? dateTo,string? productId,decimal? profitFrom,decimal? profitTo,string? search,bool completeCostsOnly=false,int page=1,int pageSize=50) =>
 {
     if(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)return Results.BadRequest(new{title="dateFrom не может быть позже dateTo"});

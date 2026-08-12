@@ -62,6 +62,16 @@ public sealed class ProductCostsTests
     }
 
     [Fact]
+    public async Task Dashboard_Problems_Are_Dynamic_And_Tenant_Scoped()
+    {
+        await using var db=CreateDb();var connection=Guid.NewGuid();var foreignConnection=Guid.NewGuid();db.Products.AddRange(new(){Id="missing",OrganizationId="org",Sku="M",Name="Missing"},new(){Id="loss",OrganizationId="org",Sku="L",Name="Loss"},new(){Id="foreign",OrganizationId="other",Sku="X",Name="Foreign"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="loss",CostAmount=2000,EffectiveFrom=new(2026,1,1),CreatedByUserId="u"});db.Orders.AddRange(new(){Id="o1",ExternalId="o1",OrganizationId="org",Status=OrderStatus.Completed,Date=new(2026,8,12),Lines=[new(){Id=Guid.NewGuid(),OrderId="o1",ProductId="missing",Revenue=1000,Quantity=1},new(){Id=Guid.NewGuid(),OrderId="o1",ProductId="loss",Revenue=1000,Quantity=1}]},new(){Id="o2",ExternalId="o2",OrganizationId="other",Status=OrderStatus.Completed,Date=new(2026,8,12),Lines=[new(){Id=Guid.NewGuid(),OrderId="o2",ProductId="foreign",Revenue=1000,Quantity=1}]});db.MarketplaceConnections.AddRange(new(){Id=connection,OrganizationId="org",DisplayName="Main"},new(){Id=foreignConnection,OrganizationId="other",DisplayName="Foreign"});db.SyncJobs.AddRange(new(){Id=Guid.NewGuid(),OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,ErrorCode="KASPI_429"},new(){Id=Guid.NewGuid(),OrganizationId="other",MarketplaceConnectionId=foreignConnection,Status=SyncJobStatus.RequiresAttention,ErrorCode="SECRET"});await db.SaveChangesAsync();
+
+        var result=JsonSerializer.SerializeToElement(await DbAnalytics.DashboardProblemsAsync(db,"org",new(2026,8,1),new(2026,8,31)));
+
+        Assert.Single(result.GetProperty("missingCosts").EnumerateArray());Assert.Equal("missing",result.GetProperty("missingCosts")[0].GetProperty("id").GetString());Assert.Single(result.GetProperty("negativeMargins").EnumerateArray());Assert.Equal("loss",result.GetProperty("negativeMargins")[0].GetProperty("id").GetString());Assert.Single(result.GetProperty("syncIssues").EnumerateArray());Assert.Equal("KASPI_429",result.GetProperty("syncIssues")[0].GetProperty("errorCode").GetString());Assert.Equal(3,result.GetProperty("totalCount").GetInt32());
+    }
+
+    [Fact]
     public async Task Csv_Import_Previews_Then_Confirms_Only_Valid_Rows()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});await db.SaveChangesAsync();
