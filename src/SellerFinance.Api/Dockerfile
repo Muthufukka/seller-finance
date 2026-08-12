@@ -15,5 +15,6 @@ WORKDIR /app
 COPY --from=api-build /app/publish .
 COPY --from=web-build /web/dist ./wwwroot
 ENV ASPNETCORE_URLS=http://0.0.0.0:10000
+ENV DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE=false
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "SellerFinance.Api.dll"]
