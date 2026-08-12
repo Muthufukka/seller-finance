@@ -40,13 +40,13 @@ public sealed class FinancialImportService(SellerFinanceDbContext db)
         var seen=new HashSet<string>(StringComparer.Ordinal);
         for(var i=0;i<raw.Count;i++)
         {
-            var source=raw[i];var typeText=Get(source,"type");var amount=Money(Get(source,"amount"));var date=Date(Get(source,"date"));var sku=Get(source,"sku");var externalOrder=Get(source,"orderexternalid","orderid");var comment=Null(Get(source,"comment"));
+            var source=raw[i];var typeText=Get(source,"type");var amount=Money(Get(source,"amount"));var date=Date(Get(source,"date"));var periodEndText=Get(source,"periodend");var periodEnd=String.IsNullOrWhiteSpace(periodEndText)?null:Date(periodEndText);var sku=Get(source,"sku");var externalOrder=Get(source,"orderexternalid","orderid");var comment=Null(Get(source,"comment"));
             products.TryGetValue(sku,out var product);orders.TryGetValue(externalOrder,out var order);var status="Valid";string? error=null;
             var parsed=Enum.TryParse<ExpenseType>(typeText,true,out var expenseType);
-            if(!parsed){status="Error";error="Некорректный Type";}else if(amount is null||amount<=0){status="Error";error="Некорректная сумма";}else if(date is null){status="Error";error="Некорректная дата";}else if(sku.Length>0&&product is null){status="Error";error="SKU не найден в организации";}else if(externalOrder.Length>0&&order is null){status="Error";error="Заказ не найден в организации";}
-            var fingerprint=status=="Valid"?Hash($"{expenseType}|{amount:0.####}|{date:yyyy-MM-dd}|{product?.Id}|{order?.Id}|{comment}"):null;
+            if(!parsed){status="Error";error="Некорректный Type";}else if(amount is null||amount<=0){status="Error";error="Некорректная сумма";}else if(date is null){status="Error";error="Некорректная дата";}else if(periodEndText.Length>0&&periodEnd is null){status="Error";error="Некорректная дата PeriodEnd";}else if(periodEnd.HasValue&&periodEnd<date){status="Error";error="PeriodEnd раньше Date";}else if(periodEnd.HasValue&&periodEnd.Value.DayNumber-date.Value.DayNumber>=366){status="Error";error="Период превышает 366 дней";}else if(sku.Length>0&&product is null){status="Error";error="SKU не найден в организации";}else if(externalOrder.Length>0&&order is null){status="Error";error="Заказ не найден в организации";}
+            var fingerprint=status=="Valid"?Hash($"{expenseType}|{amount:0.####}|{date:yyyy-MM-dd}|{periodEnd:yyyy-MM-dd}|{product?.Id}|{order?.Id}|{comment}"):null;
             if(fingerprint is not null&&(!seen.Add(fingerprint)||existing.Contains(fingerprint))){status="Duplicate";error="Расход уже существует";}
-            Add(job,new(){Id=Guid.NewGuid(),ImportJobId=job.Id,RowNumber=i+2,Status=status,Error=error,ExpenseType=parsed?expenseType:null,Amount=amount,Date=date,ProductId=product?.Id,OrderId=order?.Id,Comment=comment,Fingerprint=fingerprint});
+            Add(job,new(){Id=Guid.NewGuid(),ImportJobId=job.Id,RowNumber=i+2,Status=status,Error=error,ExpenseType=parsed?expenseType:null,Amount=amount,Date=date,PeriodEnd=periodEnd,ProductId=product?.Id,OrderId=order?.Id,Comment=comment,Fingerprint=fingerprint});
         }
     }
 
@@ -82,13 +82,13 @@ public sealed class FinancialImportService(SellerFinanceDbContext db)
         if(job.Status!=FinancialImportStatus.Preview||job.ExpiresAt<=DateTimeOffset.UtcNow)throw new FinancialImportException("Preview уже применён или истёк");
         var rows=await db.FinancialImportRows.Where(x=>x.ImportJobId==jobId&&(x.Status=="Valid"||x.Status=="Update")).ToArrayAsync(ct);
         if(job.Type==FinancialImportType.Expenses)
-            foreach(var row in rows)db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,Type=row.ExpenseType!.Value,Amount=row.Amount!.Value,Date=row.Date!.Value,ProductId=row.ProductId,OrderId=row.OrderId,Comment=row.Comment,Source=ExpenseSource.Import,ImportJobId=job.Id,ImportFingerprint=row.Fingerprint,CreatedByUserId=userId});
+            foreach(var row in rows)db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,Type=row.ExpenseType!.Value,Amount=row.Amount!.Value,Date=row.Date!.Value,PeriodEnd=row.PeriodEnd,ProductId=row.ProductId,OrderId=row.OrderId,Comment=row.Comment,Source=ExpenseSource.Import,ImportJobId=job.Id,ImportFingerprint=row.Fingerprint,CreatedByUserId=userId});
         else
             foreach(var row in rows){var fee=await db.ActualFees.SingleOrDefaultAsync(x=>x.OrganizationId==tenant&&x.OrderLineId==row.OrderLineId,ct);if(fee is null)db.ActualFees.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,OrderLineId=row.OrderLineId!.Value,Amount=row.Amount!.Value,Source="Import",ImportJobId=job.Id,ExternalRef=row.ExternalRef,CreatedByUserId=userId});else{fee.Amount=row.Amount!.Value;fee.Source="Import";fee.ImportJobId=job.Id;fee.ExternalRef=row.ExternalRef;}}
         job.Status=FinancialImportStatus.Applied;job.AppliedAt=DateTimeOffset.UtcNow;await db.SaveChangesAsync(ct);if(transaction is not null)await transaction.CommitAsync(ct);return rows.Length;
     }
 
-    public static object ToPreview(FinancialImportJobEntity job,IEnumerable<FinancialImportRowEntity> rows)=>new{job.Id,type=job.Type.ToString(),status=job.Status.ToString(),job.TotalRows,job.ValidRows,job.UpdateRows,job.DuplicateRows,job.ErrorRows,job.ExpectedChanges,job.ExpiresAt,rows=rows.Select(x=>new{x.RowNumber,x.Status,x.Error,type=x.ExpenseType?.ToString(),x.Amount,x.Date,x.ProductId,x.OrderId,x.OrderLineId,x.Comment,x.ExternalRef})};
+    public static object ToPreview(FinancialImportJobEntity job,IEnumerable<FinancialImportRowEntity> rows)=>new{job.Id,type=job.Type.ToString(),status=job.Status.ToString(),job.TotalRows,job.ValidRows,job.UpdateRows,job.DuplicateRows,job.ErrorRows,job.ExpectedChanges,job.ExpiresAt,rows=rows.Select(x=>new{x.RowNumber,x.Status,x.Error,type=x.ExpenseType?.ToString(),x.Amount,x.Date,x.PeriodEnd,x.ProductId,x.OrderId,x.OrderLineId,x.Comment,x.ExternalRef})};
 
     private void Add(FinancialImportJobEntity job,FinancialImportRowEntity row){db.FinancialImportRows.Add(row);switch(row.Status){case "Valid":job.ValidRows++;job.ExpectedChanges++;break;case "Update":job.UpdateRows++;job.ExpectedChanges++;break;case "Duplicate":job.DuplicateRows++;break;default:job.ErrorRows++;break;}}
     private static void Require(List<Dictionary<string,string>> rows,params string[] names){if(rows.Count==0)throw new FinancialImportException("Файл не содержит строк");foreach(var name in names)if(!rows[0].ContainsKey(Normalize(name)))throw new FinancialImportException($"Нет обязательной колонки: {name}");}

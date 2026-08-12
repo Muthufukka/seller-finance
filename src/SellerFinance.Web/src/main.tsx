@@ -1221,6 +1221,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
         type: f.get("type"),
         amount: Number(f.get("amount")),
         date: f.get("date"),
+        periodEnd: f.get("periodEnd") || null,
         productId: f.get("productId") || null,
         comment: f.get("comment"),
       }),
@@ -1255,6 +1256,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
           </select>
           <input name="amount" type="number" min="0.01" step="0.01" placeholder="Сумма, ₸" required />
           <input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required />
+          <input name="periodEnd" type="date" aria-label="Конец периода" title="Необязательно: конец периода расхода" />
           <select name="productId">
             <option value="">Вся организация</option>
             {products.map((p) => (
@@ -1274,7 +1276,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
           <table>
             <thead>
               <tr>
-                <th>Дата</th>
+                <th>Дата / период</th>
                 <th>Тип</th>
                 <th>Сумма</th>
                 <th>Привязка</th>
@@ -1285,7 +1287,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{new Date(r.date).toLocaleDateString("ru-RU")}</td>
+                  <td>{new Date(r.date).toLocaleDateString("ru-RU")}{r.periodEnd&&r.periodEnd!==r.date?` — ${new Date(r.periodEnd).toLocaleDateString("ru-RU")}`:""}</td>
                   <td>{r.type}</td>
                   <td>{money(r.amount)}</td>
                   <td>{r.productId ? products.find((p) => p.id === r.productId)?.sku : "Организация"}</td>

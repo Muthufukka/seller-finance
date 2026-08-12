@@ -46,6 +46,20 @@ public sealed class FinancialRulesTests
         (await db.Organizations.SingleAsync()).AllocateOrganizationExpenses=false;await db.SaveChangesAsync();products=JsonSerializer.SerializeToElement(await DbAnalytics.ProductsAsync(db,"org"));Assert.All(products.EnumerateArray(),x=>Assert.Equal(0,x.GetProperty("allocatedOrganizationExpenses").GetDecimal()));
     }
 
+    [Fact]
+    public async Task Period_Expense_Is_Recognized_Only_For_Overlapping_Days()
+    {
+        await using var db=CreateDb();SeedOrder(db);db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Type=ExpenseType.Advertising,Amount=1000,Date=new(2026,8,1),PeriodEnd=new(2026,8,10),CreatedByUserId="user"});await db.SaveChangesAsync();
+        Assert.Equal(500,await SummaryValue(db,"OperatingExpenses",new(2026,8,1),new(2026,8,5)));Assert.Equal(500,await SummaryValue(db,"OperatingExpenses",new(2026,8,6),new(2026,8,10)));Assert.Equal(0,await SummaryValue(db,"OperatingExpenses",new(2026,8,11),new(2026,8,12)));
+        var daily=JsonSerializer.SerializeToElement(await DbAnalytics.TimeSeriesAsync(db,"org",new(2026,8,1),new(2026,8,10)));Assert.Equal(10,daily.GetArrayLength());Assert.Equal(0,daily.EnumerateArray().Sum(x=>x.GetProperty("profit").GetDecimal()));Assert.Equal(-100,daily[0].GetProperty("profit").GetDecimal());Assert.Equal(900,daily[1].GetProperty("profit").GetDecimal());
+    }
+
+    [Fact]
+    public void Period_Expense_Daily_Rounding_Preserves_Exact_Total()
+    {
+        var expense=new ExpenseEntity{Amount=100,Date=new(2026,8,1),PeriodEnd=new(2026,8,3)};var days=ExpenseRecognition.ByDay([expense]);Assert.Equal(100,days.Values.Sum());Assert.Equal(3,days.Count);Assert.Equal(ExpenseRecognition.Amount(expense,new(2026,8,2),new(2026,8,3)),days[new(2026,8,2)]+days[new(2026,8,3)]);
+    }
+
     private static OrderLineEntity SeedOrder(SellerFinanceDbContext db)
     {
         db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU",Name="Product"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=0.01m,EffectiveFrom=new(2020,1,1),Source=CostSource.Manual,CreatedByUserId="user"});

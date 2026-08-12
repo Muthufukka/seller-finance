@@ -28,6 +28,13 @@ public sealed class FinancialImportTests
     }
 
     [Fact]
+    public async Task Expense_Import_Validates_And_Applies_Period_End()
+    {
+        await using var db=CreateDb();var service=new FinancialImportService(db);var valid=await service.PreviewAsync(FinancialImportType.Expenses,"org","user",File("Type,Amount,Date,PeriodEnd\nServices,3100,2026-08-01,2026-08-31","expenses.csv"),default);Assert.Equal(1,valid.ValidRows);await service.ConfirmAsync(valid.Id,"org","user",default);Assert.Equal(new DateOnly(2026,8,31),(await db.Expenses.SingleAsync()).PeriodEnd);
+        var invalid=await service.PreviewAsync(FinancialImportType.Expenses,"org","user",File("Type,Amount,Date,PeriodEnd\nServices,100,2026-08-10,2026-08-01","expenses.csv"),default);Assert.Equal(1,invalid.ErrorRows);
+    }
+
+    [Fact]
     public async Task Actual_Fee_Import_Is_Tenant_Scoped_And_Upserts()
     {
         await using var db=CreateDb();var line=Guid.NewGuid();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.Orders.Add(new(){Id="o1",OrganizationId="org",ExternalId="ORDER-1",Date=new(2026,8,1),Lines=[new(){Id=line,OrderId="o1",ExternalId="LINE-1",ProductId="p1"}]});db.ActualFees.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",OrderLineId=line,Amount=100,CreatedByUserId="user"});await db.SaveChangesAsync();var service=new FinancialImportService(db);
