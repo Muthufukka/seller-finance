@@ -265,7 +265,7 @@ function App() {
         {page === "integrations" && <KaspiConnections session={session} />}
         {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
         {page === "fees" && <Fees session={session} products={products} />}
-        {page === "exports" && <Exports session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
+        {page === "exports" && <Exports key={session.organizationId} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
         {page === "settings" && <SettingsPage session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
         {page === "admin" && session.isSaasAdmin && <AdminConsole session={session} />}
       </main>
@@ -1488,8 +1488,11 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
 }
 
 function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Session; dateFrom?:string; dateTo?:string; completeCostsOnly:boolean }) {
-  const [jobs, setJobs] = useState<any[]>([]),
-    [busy, setBusy] = useState(false);
+  const { t } = useI18n();
+  const storageKey = `seller-finance-exports-${session.organizationId}`;
+  const [jobs, setJobs] = useState<any[]>(() => {
+    try { return JSON.parse(sessionStorage.getItem(storageKey) || "[]"); } catch { return []; }
+  }), [busy, setBusy] = useState(false), [message, setMessage] = useState("");
   const headers = { "X-Organization-Id": session.organizationId };
   const create = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1506,16 +1509,17 @@ function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Se
         completeCostsOnly: f.get("completeCostsOnly") === "on",
       }),
     });
+    const data = await r.json().catch(() => null);
     if (r.ok) {
-      const created = await r.json();
       const item = {
-        ...created,
+        ...data,
         report: f.get("report"),
         format: f.get("format"),
       };
       setJobs((x) => [item, ...x]);
       poll(item);
-    }
+      setMessage("");
+    } else setMessage(data?.title || data?.detail || t("exports.createError"));
     setBusy(false);
   };
   const poll = async (job: any) => {
@@ -1527,55 +1531,63 @@ function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Se
       setJobs((items) => items.map((x) => (x.id === job.id ? { ...x, ...state } : x)));
       if (state.status === "Succeeded" || state.status === "Failed") return;
     }
+    setMessage(t("exports.timeout"));
   };
+  useEffect(() => { try { sessionStorage.setItem(storageKey, JSON.stringify(jobs.slice(0, 20))); } catch { /* Export state remains usable in memory. */ } }, [jobs, storageKey]);
+  useEffect(() => { jobs.filter((job) => job.status === "Queued" || job.status === "Running").forEach(poll); }, []);
+  const reportLabel = (report: string) => ({ Products: t("exports.products"), Orders: t("exports.orders"), MissingCosts: t("exports.missingCosts"), Abc: t("exports.abc") }[report] || report);
+  const statusLabel = (status: string) => ({ Queued: t("exports.queued"), Running: t("exports.running"), Succeeded: t("exports.succeeded"), Failed: t("exports.failed"), Expired: t("exports.expired") }[status] || status);
+  const expired = (job: any) => job.status === "Expired" || (job.expiresAt && new Date(job.expiresAt) <= new Date());
   return (
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">ОТЧЁТЫ</span>
-          <h1>Экспорт</h1>
-          <p>Выгрузки создаются в фоне; ссылка действует один час.</p>
+          <span className="eyebrow">{t("exports.eyebrow")}</span>
+          <h1>{t("exports.title")}</h1>
+          <p>{t("exports.lead")}</p>
         </div>
       </div>
       <article className="entry-card">
         <form className="export-form" onSubmit={create}>
           <select name="report">
-            <option value="Products">Прибыль по товарам</option>
-            <option value="Orders">Заказы</option>
-            <option value="MissingCosts">Товары без себестоимости</option>
-            <option value="Abc">ABC-анализ</option>
+            <option value="Products">{t("exports.products")}</option>
+            <option value="Orders">{t("exports.orders")}</option>
+            <option value="MissingCosts">{t("exports.missingCosts")}</option>
+            <option value="Abc">{t("exports.abc")}</option>
           </select>
           <select name="format">
             <option value="xlsx">XLSX</option>
             <option value="csv">CSV UTF-8</option>
           </select>
-          <label className="export-date">С<input name="dateFrom" type="date" defaultValue={dateFrom}/></label>
-          <label className="export-date">По<input name="dateTo" type="date" min={dateFrom} defaultValue={dateTo}/></label>
-          <label className="export-complete"><input name="completeCostsOnly" type="checkbox" defaultChecked={completeCostsOnly}/>Только продажи с полной себестоимостью</label>
+          <label className="export-date">{t("exports.from")}<input name="dateFrom" type="date" defaultValue={dateFrom}/></label>
+          <label className="export-date">{t("exports.to")}<input name="dateTo" type="date" min={dateFrom} defaultValue={dateTo}/></label>
+          <label className="export-complete"><input name="completeCostsOnly" type="checkbox" defaultChecked={completeCostsOnly}/>{t("exports.completeCosts")}</label>
           <button className="primary" disabled={busy}>
-            {busy ? "Создаём…" : "Сформировать"}
+            {busy ? t("exports.creating") : t("exports.create")}
           </button>
         </form>
       </article>
+      {message && <p className="integration-message">{message}</p>}
       <div className="export-jobs">
         {jobs.map((j) => (
           <article key={j.id}>
             <div>
               <b>
-                {j.report} · {String(j.format).toUpperCase()}
+                {reportLabel(j.report)} · {String(j.format).toUpperCase()}
               </b>
               <span>
-                {j.status}
-                {j.rowCount ? ` · ${j.rowCount} строк` : ""}
+                {statusLabel(expired(j) ? "Expired" : j.status)}
+                {j.rowCount !== null && j.rowCount !== undefined ? ` · ${j.rowCount} ${t("exports.rows")}` : ""}
               </span>
             </div>
-            {j.status === "Succeeded" && (
+            {j.status === "Succeeded" && !expired(j) && j.downloadToken && (
               <a className="primary" href={`/api/v1/exports/download/${j.downloadToken}`}>
-                Скачать
+                {t("exports.download")}
               </a>
             )}
           </article>
         ))}
+        {!jobs.length && <p className="muted">{t("exports.empty")}</p>}
       </div>
     </section>
   );

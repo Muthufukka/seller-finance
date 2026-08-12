@@ -30,12 +30,19 @@ const financeKk:Record<keyof typeof financeRu,string>={
   "expenses.added":"Шығын қосылды","expenses.addError":"Шығынды қосу мүмкін болмады","expenses.eyebrow":"ШЫҒЫНДАР","expenses.title":"Шығындар","expenses.lead":"Жарнама, қаптама, фулфилмент, сервистер және басқа шығындар.","expenses.advertising":"Жарнама","expenses.packaging":"Қаптама","expenses.fulfillment":"Фулфилмент","expenses.services":"Сервистер","expenses.other":"Басқа","expenses.amountPlaceholder":"Сома, ₸","expenses.periodEnd":"Кезеңнің соңы","expenses.periodEndHint":"Міндетті емес: шығын кезеңінің соңғы күні","expenses.organizationAll":"Бүкіл ұйым","expenses.order":"Тапсырыс","expenses.noOrder":"Тапсырысқа байланыссыз","expenses.comment":"Түсініктеме","expenses.add":"Қосу","expenses.datePeriod":"Күні / кезеңі","expenses.type":"Түрі","expenses.link":"Байланысы","expenses.organization":"Ұйым","expenses.delete":"Жою",
   "fees.created":"Комиссия ережесі құрылды","fees.checkParams":"Ереже параметрлерін тексеріңіз","fees.endDateRequired":"Ереженің аяқталу күнін көрсетіңіз","fees.updated":"Ереженің қолданылу кезеңі жаңартылды","fees.endError":"Ережені аяқтау мүмкін болмады","fees.eyebrow":"ҚАРЖЫЛЫҚ ЕРЕЖЕЛЕР","fees.title":"Комиссиялар","fees.lead":"Нақты ұсталым нұсқаланған ережеден басым болады.","fees.scopeOrganization":"Ұйым үшін","fees.scopeCategory":"Санат үшін","fees.scopeProduct":"Тауар үшін","fees.chooseCategory":"Санатты таңдаңыз","fees.percentage":"Пайыз","fees.fixed":"Тұрақты сома","fees.value":"Мәні","fees.effectiveTo":"Аяқталу күні","fees.create":"Ереже құру","fees.scope":"Ауқымы","fees.assignment":"Мақсаты","fees.type":"Түрі","fees.effectiveFrom":"Басталу күні","fees.finish":"Аяқтау","fees.productDeleted":"Тауар жойылған","fees.allProducts":"Барлық тауарлар","fees.unlimited":"Мерзімсіз"
 };
+const exportsRu={
+  "exports.eyebrow":"ОТЧЁТЫ","exports.title":"Экспорт","exports.lead":"Выгрузки создаются в фоне; ссылка действует один час.","exports.products":"Прибыль по товарам","exports.orders":"Заказы","exports.missingCosts":"Товары без себестоимости","exports.abc":"ABC-анализ","exports.from":"С","exports.to":"По","exports.completeCosts":"Только продажи с полной себестоимостью","exports.creating":"Создаём…","exports.create":"Сформировать","exports.createError":"Не удалось создать выгрузку","exports.rows":"строк","exports.download":"Скачать","exports.queued":"В очереди","exports.running":"Формируется","exports.succeeded":"Готово","exports.failed":"Ошибка","exports.expired":"Ссылка истекла","exports.timeout":"Формирование продолжается. Статус обновится при возврате на экран.","exports.empty":"Созданные в этой вкладке выгрузки появятся здесь."
+} as const;
+const exportsKk:Record<keyof typeof exportsRu,string>={
+  "exports.eyebrow":"ЕСЕПТЕР","exports.title":"Экспорт","exports.lead":"Жүктемелер фонда жасалады; сілтеме бір сағат жарамды.","exports.products":"Тауарлар бойынша пайда","exports.orders":"Тапсырыстар","exports.missingCosts":"Өзіндік құнсыз тауарлар","exports.abc":"ABC-талдау","exports.from":"Бастап","exports.to":"Дейін","exports.completeCosts":"Тек толық өзіндік құны бар сатылымдар","exports.creating":"Жасалуда…","exports.create":"Қалыптастыру","exports.createError":"Жүктемені жасау мүмкін болмады","exports.rows":"жол","exports.download":"Жүктеу","exports.queued":"Кезекте","exports.running":"Қалыптастырылуда","exports.succeeded":"Дайын","exports.failed":"Қате","exports.expired":"Сілтеменің мерзімі аяқталды","exports.timeout":"Қалыптастыру жалғасуда. Экранға оралғанда күйі жаңартылады.","exports.empty":"Осы бетте жасалған жүктемелер мұнда көрсетіледі."
+};
 
 export const ru = {
   ...ordersRu,
   ...productsRu,
   ...productDetailRu,
   ...financeRu,
+  ...exportsRu,
   "brand.name": "Seller Finance",
   "common.wait": "Подождите…",
   "common.logout": "выйти",
@@ -100,6 +107,7 @@ const kk:Record<TranslationKey,string>={
   ...productsKk,
   ...productDetailKk,
   ...financeKk,
+  ...exportsKk,
   "brand.name":"Seller Finance","common.wait":"Күте тұрыңыз…","common.logout":"шығу","common.create":"Құру",
   "auth.login.title":"Кіру","auth.login.lead":"Пайда мен өзіндік құнды бір жерден басқарыңыз.","auth.login.submit":"Кіру",
   "auth.register.title":"Тіркелгі ашу","auth.register.lead":"Сатушының қорғалған жұмыс кеңістігін құрыңыз.","auth.register.submit":"Тіркелу","auth.register.name":"Атыңыз","auth.register.organization":"Ұйым атауы",
