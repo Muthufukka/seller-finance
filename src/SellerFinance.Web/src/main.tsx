@@ -754,6 +754,9 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
             <h2>
               {money(detail.revenue)} · {detail.status}
             </h2>
+            <p className="fallback-note">
+              Код: {detail.code || detail.externalId} · Оплата: {detail.paymentMode || "не указана"} · Завершён: {detail.completionDate ? new Date(detail.completionDate).toLocaleDateString("ru-RU") : "дата отсутствует"}
+            </p>
             {detail.calculationDateFallback && <p className="fallback-note">Дата завершения отсутствует — расчёт выполнен по дате создания.</p>}
             <div className="breakdown">
               <div>
@@ -789,7 +792,7 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
                 <div>
                   <b>{money(l.profit)}</b>
                   <span>
-                    выручка {money(l.revenue)} · комиссия {money(l.fee)}
+                    выручка {money(l.revenue)} · base price {money(l.basePrice)} · комиссия {money(l.fee)} · доставка {money(l.delivery)}
                   </span>
                 </div>
               </div>

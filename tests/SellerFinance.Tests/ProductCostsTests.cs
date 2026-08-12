@@ -33,6 +33,14 @@ public sealed class ProductCostsTests
     }
 
     [Fact]
+    public async Task Kaspi_Completion_Date_Selects_Historical_Cost_Instead_Of_Creation_Date()
+    {
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.ProductCostHistory.AddRange(Cost(100,new(2026,8,1)),Cost(250,new(2026,8,10)));await db.SaveChangesAsync();
+        var source=new KaspiOrderDto("external","CODE",1000,"COMPLETED",new DateTimeOffset(2026,8,5,0,0,0,TimeSpan.Zero),[new("line","SKU-1","Product",null,1,1000,null)],new DateTimeOffset(2026,8,12,0,0,0,TimeSpan.Zero));await KaspiOrderImporter.UpsertAsync(db,"org",Guid.NewGuid(),[source]);await db.SaveChangesAsync();
+        var result=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org"));Assert.Equal(250,result.GetProperty("Cogs").GetDecimal());
+    }
+
+    [Fact]
     public async Task Csv_Import_Previews_Then_Confirms_Only_Valid_Rows()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});await db.SaveChangesAsync();

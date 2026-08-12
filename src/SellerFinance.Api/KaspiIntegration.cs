@@ -33,8 +33,8 @@ public sealed class TokenCipher(IConfiguration configuration)
     }
 }
 
-public sealed record KaspiOrderLineDto(string EntryId,string ProductCode,string Name,string? Category,int Quantity,decimal Revenue,decimal Delivery);
-public sealed record KaspiOrderDto(string Id,string Code,decimal TotalPrice,string Status,DateTimeOffset CreatedAt,IReadOnlyList<KaspiOrderLineDto> Lines);
+public sealed record KaspiOrderLineDto(string EntryId,string ProductCode,string Name,string? Category,int Quantity,decimal Revenue,decimal? ItemDeliveryCost,decimal? BasePrice=null,string? ExternalProductId=null);
+public sealed record KaspiOrderDto(string Id,string Code,decimal TotalPrice,string Status,DateTimeOffset CreatedAt,IReadOnlyList<KaspiOrderLineDto> Lines,DateTimeOffset? CompletedAt=null,string? PaymentMode=null,decimal SellerDeliveryCost=0m);
 public sealed record KaspiResult(bool Success,HttpStatusCode StatusCode,string? ErrorCode,IReadOnlyList<KaspiOrderDto> Orders);
 
 public sealed class KaspiClient(HttpClient http)
@@ -46,7 +46,14 @@ public sealed class KaspiClient(HttpClient http)
         for(var page=0;page<100;page++)
         {
             var uri=$"orders?page[number]={page}&page[size]=100&filter[orders][creationDate][$ge]={from.ToUnixTimeMilliseconds()}&filter[orders][creationDate][$le]={to.ToUnixTimeMilliseconds()}";using var response=await SendAsync(uri,token,cancellationToken);statusCode=response.StatusCode;if(!response.IsSuccessStatusCode)return new(false,response.StatusCode,MapError(response.StatusCode),[]);await using var stream=await response.Content.ReadAsStreamAsync(cancellationToken);using var json=await JsonDocument.ParseAsync(stream,cancellationToken:cancellationToken);if(!json.RootElement.TryGetProperty("data",out var data))break;var count=0;
-            foreach(var item in data.EnumerateArray()){count++;var a=item.GetProperty("attributes");var id=item.GetProperty("id").GetString()!;var code=a.TryGetProperty("code",out var c)?c.ToString():id;var price=a.TryGetProperty("totalPrice",out var p)&&p.TryGetDecimal(out var amount)?amount:0;var status=a.TryGetProperty("status",out var s)?s.GetString()??"PENDING":"PENDING";var millis=a.TryGetProperty("creationDate",out var d)&&d.TryGetInt64(out var ms)?ms:DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();orders.Add(new(id,code,price,status,DateTimeOffset.FromUnixTimeMilliseconds(millis),[]));}
+            foreach(var item in data.EnumerateArray())
+            {
+                count++;var attributes=item.GetProperty("attributes");var id=item.GetProperty("id").GetString()!;
+                var code=Text(attributes,"code")??id;var price=DecimalValue(attributes,"totalPrice")??0m;var status=Text(attributes,"status")??"PENDING";
+                var created=DateValue(attributes,"creationDate")??DateTimeOffset.UtcNow;var completed=DateValue(attributes,"completionDate");
+                var paymentMode=Text(attributes,"paymentMode");var sellerDelivery=DecimalValue(attributes,"deliveryCostForSeller")??0m;
+                orders.Add(new(id,code,price,status,created,[],completed,paymentMode,sellerDelivery));
+            }
             if(count<100)break;
         }
         var enriched=new List<KaspiOrderDto>();foreach(var order in orders){var lines=await GetLinesAsync(token,order.Id,cancellationToken);if(!lines.Success)return new(false,lines.StatusCode,lines.ErrorCode,[]);enriched.Add(order with{Lines=lines.Lines});}return new(true,statusCode,null,enriched);
@@ -55,11 +62,29 @@ public sealed class KaspiClient(HttpClient http)
     private async Task<(bool Success,HttpStatusCode StatusCode,string? ErrorCode,IReadOnlyList<KaspiOrderLineDto> Lines)> GetLinesAsync(string token,string orderId,CancellationToken ct)
     {
         using var response=await SendAsync($"orders/{Uri.EscapeDataString(orderId)}/entries",token,ct);if(!response.IsSuccessStatusCode)return(false,response.StatusCode,MapError(response.StatusCode),[]);await using var stream=await response.Content.ReadAsStreamAsync(ct);using var json=await JsonDocument.ParseAsync(stream,cancellationToken:ct);var lines=new List<KaspiOrderLineDto>();
-        foreach(var entry in json.RootElement.GetProperty("data").EnumerateArray()){var entryId=entry.GetProperty("id").GetString()!;var a=entry.GetProperty("attributes");var quantity=a.TryGetProperty("quantity",out var q)&&q.TryGetInt32(out var qty)?qty:1;var revenue=a.TryGetProperty("totalPrice",out var t)&&t.TryGetDecimal(out var total)?total:0;var delivery=a.TryGetProperty("deliveryCost",out var d)&&d.TryGetDecimal(out var deliveryCost)?deliveryCost:0;using var productResponse=await SendAsync($"orderentries/{Uri.EscapeDataString(entryId)}/product",token,ct);if(!productResponse.IsSuccessStatusCode)return(false,productResponse.StatusCode,MapError(productResponse.StatusCode),[]);await using var productStream=await productResponse.Content.ReadAsStreamAsync(ct);using var productJson=await JsonDocument.ParseAsync(productStream,cancellationToken:ct);var product=productJson.RootElement.GetProperty("data");var pa=product.GetProperty("attributes");var code=pa.TryGetProperty("code",out var c)?c.ToString():product.GetProperty("id").ToString();var name=pa.TryGetProperty("name",out var n)?n.GetString()??code:code;var category=pa.TryGetProperty("category",out var cat)?cat.GetString():null;lines.Add(new(entryId,code,name,category,quantity,revenue,delivery));}return(true,response.StatusCode,null,lines);
+        foreach(var entry in json.RootElement.GetProperty("data").EnumerateArray())
+        {
+            var entryId=entry.GetProperty("id").GetString()!;var attributes=entry.GetProperty("attributes");
+            var quantity=attributes.TryGetProperty("quantity",out var quantityJson)&&quantityJson.TryGetInt32(out var parsedQuantity)?parsedQuantity:1;
+            var revenue=DecimalValue(attributes,"totalPrice")??0m;var delivery=DecimalValue(attributes,"deliveryCost");var basePrice=DecimalValue(attributes,"basePrice");
+            using var productResponse=await SendAsync($"orderentries/{Uri.EscapeDataString(entryId)}/product",token,ct);if(!productResponse.IsSuccessStatusCode)return(false,productResponse.StatusCode,MapError(productResponse.StatusCode),[]);
+            await using var productStream=await productResponse.Content.ReadAsStreamAsync(ct);using var productJson=await JsonDocument.ParseAsync(productStream,cancellationToken:ct);var product=productJson.RootElement.GetProperty("data");var productAttributes=product.GetProperty("attributes");
+            var externalProductId=product.GetProperty("id").ToString();var code=Text(productAttributes,"code")??externalProductId;var name=Text(productAttributes,"name")??code;var category=Text(productAttributes,"category");
+            lines.Add(new(entryId,code,name,category,quantity,revenue,delivery,basePrice,externalProductId));
+        }
+        return(true,response.StatusCode,null,lines);
     }
     private async Task<HttpResponseMessage> SendAsync(string uri,string token,CancellationToken ct){var request=new HttpRequestMessage(HttpMethod.Get,uri);request.Headers.TryAddWithoutValidation("X-Auth-Token",token);request.Headers.TryAddWithoutValidation("Accept","application/vnd.api+json");return await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);}
 
     private static string MapError(HttpStatusCode status)=>status switch { HttpStatusCode.Unauthorized=>"TOKEN_UNAUTHORIZED",HttpStatusCode.Forbidden=>"TOKEN_FORBIDDEN",(HttpStatusCode)429=>"RATE_LIMITED",_ when (int)status>=500=>"KASPI_UNAVAILABLE",_=>"KASPI_REQUEST_FAILED" };
+    private static string? Text(JsonElement attributes,string name)=>attributes.TryGetProperty(name,out var value)&&value.ValueKind is not(JsonValueKind.Null or JsonValueKind.Undefined)?value.ToString():null;
+    private static decimal? DecimalValue(JsonElement attributes,string name)=>attributes.TryGetProperty(name,out var value)&&value.TryGetDecimal(out var parsed)?parsed:null;
+    private static DateTimeOffset? DateValue(JsonElement attributes,string name)
+    {
+        if(!attributes.TryGetProperty(name,out var value)||value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)return null;
+        if(value.TryGetInt64(out var milliseconds))return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+        return DateTimeOffset.TryParse(value.ToString(),System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out var parsed)?parsed:null;
+    }
 }
 
 public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyncWorker> logger) : BackgroundService
@@ -113,7 +138,22 @@ public static class KaspiOrderImporter
 {
     public static async Task UpsertAsync(SellerFinanceDbContext db,string organizationId,Guid connectionId,IReadOnlyList<KaspiOrderDto> sources,CancellationToken ct=default)
     {
-        foreach(var source in sources){var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.MarketplaceConnectionId==connectionId&&x.ExternalId==source.Id,ct);if(order is null){order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,MarketplaceConnectionId=connectionId,ExternalId=source.Id};db.Orders.Add(order);}order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime);order.Status=MapStatus(source.Status);order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId));}foreach(var item in source.Lines){var product=await db.Products.SingleOrDefaultAsync(x=>x.OrganizationId==organizationId&&x.Sku==item.ProductCode,ct);if(product is null){product=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,Sku=item.ProductCode,Name=item.Name,Category=item.Category};db.Products.Add(product);}else{product.Name=item.Name;product.Category=item.Category;}var line=order.Lines.SingleOrDefault(x=>x.ExternalId==item.EntryId);if(line is null){line=new(){Id=Guid.NewGuid(),OrderId=order.Id,ExternalId=item.EntryId};order.Lines.Add(line);}line.ProductId=product.Id;line.Quantity=item.Quantity;line.Revenue=item.Revenue;line.Delivery=item.Delivery;}}
+        foreach(var source in sources)
+        {
+            var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.MarketplaceConnectionId==connectionId&&x.ExternalId==source.Id,ct);
+            if(order is null){order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,MarketplaceConnectionId=connectionId,ExternalId=source.Id};db.Orders.Add(order);}
+            order.Code=source.Code;order.TotalPrice=source.TotalPrice;order.PaymentMode=source.PaymentMode;order.SellerDeliveryCost=source.SellerDeliveryCost;
+            order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime);order.CompletionDate=source.CompletedAt.HasValue?DateOnly.FromDateTime(source.CompletedAt.Value.UtcDateTime):null;order.Status=MapStatus(source.Status);order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
+            if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId));}
+            var hasCompleteItemDelivery=source.Lines.Count>0&&source.Lines.All(x=>x.ItemDeliveryCost.HasValue);var allocatedDelivery=hasCompleteItemDelivery?null:FinanceCalculator.AllocateByRevenue(source.SellerDeliveryCost,source.Lines.Select(x=>x.Revenue).ToArray());
+            for(var index=0;index<source.Lines.Count;index++)
+            {
+                var item=source.Lines[index];var product=await db.Products.SingleOrDefaultAsync(x=>x.OrganizationId==organizationId&&x.Sku==item.ProductCode,ct);
+                if(product is null){product=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,Sku=item.ProductCode,Name=item.Name,Category=item.Category,ExternalProductId=item.ExternalProductId};db.Products.Add(product);}else{product.Name=item.Name;product.Category=item.Category;product.ExternalProductId=item.ExternalProductId??product.ExternalProductId;}
+                var line=order.Lines.SingleOrDefault(x=>x.ExternalId==item.EntryId);if(line is null){line=new(){Id=Guid.NewGuid(),OrderId=order.Id,ExternalId=item.EntryId};order.Lines.Add(line);}
+                line.ProductId=product.Id;line.Quantity=item.Quantity;line.Revenue=item.Revenue;line.BasePrice=item.BasePrice;line.ItemDeliveryCost=item.ItemDeliveryCost;line.Delivery=hasCompleteItemDelivery?item.ItemDeliveryCost!.Value:allocatedDelivery![index];
+            }
+        }
     }
     private static OrderStatus MapStatus(string value)=>value.ToUpperInvariant() switch{"COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED"=>OrderStatus.Cancelled,_=>OrderStatus.Pending};
 }

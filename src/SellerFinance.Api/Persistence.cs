@@ -42,10 +42,14 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrderEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderEntity>().HasIndex(x => new { x.MarketplaceConnectionId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderEntity>().HasIndex(x=>new{x.OrganizationId,x.Date});
+        modelBuilder.Entity<OrderEntity>().Property(x=>x.TotalPrice).HasPrecision(19,4);
+        modelBuilder.Entity<OrderEntity>().Property(x=>x.SellerDeliveryCost).HasPrecision(19,4);
         modelBuilder.Entity<OrderEntity>().HasOne<MarketplaceConnectionEntity>().WithMany().HasForeignKey(x=>x.MarketplaceConnectionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<OrderLineEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderLineEntity>().HasIndex(x => new { x.OrderId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Revenue).HasPrecision(19, 4);
+        modelBuilder.Entity<OrderLineEntity>().Property(x => x.BasePrice).HasPrecision(19, 4);
+        modelBuilder.Entity<OrderLineEntity>().Property(x => x.ItemDeliveryCost).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.ActualFee).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.FeeRate).HasPrecision(9, 6);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Delivery).HasPrecision(19, 4);
@@ -429,6 +433,8 @@ public sealed class ProductEntity
     public string Sku { get; set; } = "";
     public string Name { get; set; } = "";
     public string? Category { get; set; }
+    public string? ExternalProductId { get; set; }
+    public string Status { get; set; } = "Active";
 }
 
 public sealed class OrderEntity
@@ -437,6 +443,10 @@ public sealed class OrderEntity
     public string OrganizationId { get; set; } = "";
     public Guid MarketplaceConnectionId { get; set; }
     public string ExternalId { get; set; } = "";
+    public string Code { get; set; } = "";
+    public decimal TotalPrice { get; set; }
+    public string? PaymentMode { get; set; }
+    public decimal SellerDeliveryCost { get; set; }
     public OrderStatus Status { get; set; }
     public DateOnly Date { get; set; }
     public DateOnly? CompletionDate { get; set; }
@@ -450,6 +460,8 @@ public sealed class OrderLineEntity
     public string OrderId { get; set; } = "";
     public string? ExternalId { get; set; }
     public string ProductId { get; set; } = "";
+    public decimal? BasePrice { get; set; }
+    public decimal? ItemDeliveryCost { get; set; }
     public decimal Revenue { get; set; }
     public int Quantity { get; set; }
     public decimal? ActualFee { get; set; }
@@ -587,7 +599,7 @@ public static class DbAnalytics
             var profit=cogs.HasValue ? revenue-cogs.Value-costs-productExpenses.GetValueOrDefault(p.Id) : (decimal?)null;
             var margin=profit.HasValue&&revenue!=0 ? Decimal.Round(profit.Value/revenue*100m,1) : (decimal?)null;
             var current=histories.Where(x=>x.ProductId==p.Id&&x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow)).OrderByDescending(x=>x.EffectiveFrom).FirstOrDefault()?.CostAmount;
-            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=current.HasValue?"profitable":"missing-cost" };
+            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, p.Category, p.ExternalProductId, productStatus=p.Status, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=p.Status=="Archived"?"archived":current.HasValue?"profitable":"missing-cost" };
         }).ToArray();
     }
 
@@ -602,7 +614,7 @@ public static class DbAnalytics
     {
         var entity=await db.Orders.AsNoTracking().Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==tenant);if(entity is null)return null;
         var fact=(await FactsAsync(db,tenant)).Single(x=>x.Id==id);var result=FinanceCalculator.Calculate([fact]);var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        var storeName=await db.MarketplaceConnections.AsNoTracking().Where(x=>x.Id==entity.MarketplaceConnectionId&&x.OrganizationId==tenant).Select(x=>x.DisplayName).SingleOrDefaultAsync();return new{entity.Id,entity.ExternalId,connectionId=entity.MarketplaceConnectionId,storeName=storeName??"Kaspi",date=fact.Date,status=entity.Status.ToString(),entity.CalculationDateFallback,result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,result.VariableCosts,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,lines=fact.Lines.Select((x,i)=>{products.TryGetValue(x.ProductId,out var p);var fee=x.ActualFee??Decimal.Round(x.Revenue*x.FeeRate,4);var cogs=x.UnitCost*x.Quantity;return new{id=entity.Lines[i].Id,x.ProductId,sku=p?.Sku,name=p?.Name,x.Quantity,x.Revenue,x.UnitCost,cogs,fee,x.Delivery,x.OtherVariableCosts,profit=cogs.HasValue?x.Revenue-cogs.Value-fee-x.Delivery-x.OtherVariableCosts:(decimal?)null};})};
+        var storeName=await db.MarketplaceConnections.AsNoTracking().Where(x=>x.Id==entity.MarketplaceConnectionId&&x.OrganizationId==tenant).Select(x=>x.DisplayName).SingleOrDefaultAsync();return new{entity.Id,entity.ExternalId,entity.Code,entity.TotalPrice,entity.PaymentMode,entity.SellerDeliveryCost,entity.CompletionDate,connectionId=entity.MarketplaceConnectionId,storeName=storeName??"Kaspi",date=fact.Date,status=entity.Status.ToString(),entity.CalculationDateFallback,result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,result.VariableCosts,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,lines=fact.Lines.Select((x,i)=>{products.TryGetValue(x.ProductId,out var p);var fee=x.ActualFee??Decimal.Round(x.Revenue*x.FeeRate,4);var cogs=x.UnitCost*x.Quantity;return new{id=entity.Lines[i].Id,x.ProductId,sku=p?.Sku,name=p?.Name,externalProductId=p?.ExternalProductId,x.Quantity,x.Revenue,entity.Lines[i].BasePrice,entity.Lines[i].ItemDeliveryCost,x.UnitCost,cogs,fee,x.Delivery,x.OtherVariableCosts,profit=cogs.HasValue?x.Revenue-cogs.Value-fee-x.Delivery-x.OtherVariableCosts:(decimal?)null};})};
     }
 
     private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null)
