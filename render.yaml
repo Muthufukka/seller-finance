@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: seller-finance-demo
+    runtime: docker
+    dockerfilePath: ./src/SellerFinance.Api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:10000

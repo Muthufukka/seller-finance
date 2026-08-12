@@ -1,0 +1,14 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/SellerFinance.Api/Dockerfile
+    ports:
+      - "5068:8080"
+  web:
+    build:
+      context: src/SellerFinance.Web
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
