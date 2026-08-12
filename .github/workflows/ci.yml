@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Restore backend
+        run: dotnet tool restore && dotnet restore SellerFinance.slnx
+      - name: Test backend and API E2E
+        run: dotnet test SellerFinance.slnx --configuration Release --no-restore --logger "trx;LogFileName=tests.trx"
+      - name: Install frontend dependencies
+        working-directory: src/SellerFinance.Web
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        working-directory: src/SellerFinance.Web
+        run: pnpm build
+      - name: Verify EF migration script
+        run: dotnet ef migrations script --idempotent --project src/SellerFinance.Api --startup-project src/SellerFinance.Api --output migration.sql
+        env:
+          DATABASE_URL: Host=localhost;Database=validation;Username=validation;Password=validation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-results
+          path: |
+            **/TestResults/*.trx
+            migration.sql

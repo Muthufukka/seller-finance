@@ -1,8 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using SellerFinance.Api;
 using SellerFinance.Domain;
 
@@ -10,18 +6,6 @@ namespace SellerFinance.Tests;
 
 public sealed class OrganizationDeletionTests
 {
-    [Fact]
-    public void Delete_Route_Metadata_Can_Be_Built()
-    {
-        var builder=WebApplication.CreateBuilder();builder.Services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(Guid.NewGuid().ToString()));builder.Services.AddIdentityCore<AppUser>().AddEntityFrameworkStores<SellerFinanceDbContext>().AddSignInManager();
-        var app=builder.Build();
-#pragma warning disable AD0001
-        app.MapDelete("/organizations/{id}",OrganizationEndpoints.DeleteAsync);
-#pragma warning restore AD0001
-        var endpoints=((IEndpointRouteBuilder)app).DataSources.SelectMany(x=>x.Endpoints).ToArray();
-        Assert.Single(endpoints);Assert.Contains("DELETE",endpoints[0].DisplayName);
-    }
-
     [Fact]
     public async Task Owner_Deletion_Removes_All_Tenant_Data_And_Orphaned_Account()
     {

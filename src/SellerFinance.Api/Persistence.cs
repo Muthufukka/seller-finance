@@ -448,7 +448,7 @@ public static class DatabaseSeed
     private static readonly Guid DemoConnectionId=Guid.Parse("11111111-1111-1111-1111-111111111111");
     public static async Task InitializeAsync(SellerFinanceDbContext db)
     {
-        await db.Database.MigrateAsync();
+        if(db.Database.IsRelational())await db.Database.MigrateAsync();else await db.Database.EnsureCreatedAsync();
         if (await db.Organizations.AnyAsync()){await EnsureNotificationRulesAsync(db);return;}
 
         db.Organizations.Add(new() { Id = DemoTenantId, Name = "Aspan Market" });

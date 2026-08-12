@@ -1,5 +1,7 @@
 # Seller Finance production runbook
 
+Автоматические E2E, production smoke и load-проверки описаны в `docs/verification.md`.
+
 ## Deploy
 
 1. Убедиться, что CI-тесты и frontend build успешны.

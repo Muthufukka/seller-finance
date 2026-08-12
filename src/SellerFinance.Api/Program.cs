@@ -7,8 +7,8 @@ using System.Text.Json;
 using SellerFinance.Api;
 
 var builder = WebApplication.CreateBuilder(args);
-var connection = DatabaseConfiguration.GetConnectionString(builder.Configuration)
-    ?? throw new InvalidOperationException("DATABASE_URL is required.");
+var useTestDatabase=builder.Environment.IsEnvironment("Testing")&&builder.Configuration.GetValue<bool>("TEST_USE_INMEMORY");
+var connection = useTestDatabase?"Host=localhost;Database=seller_finance_test;Username=test;Password=test":DatabaseConfiguration.GetConnectionString(builder.Configuration) ?? throw new InvalidOperationException("DATABASE_URL is required.");
 builder.Services.AddDbContext<SellerFinanceDbContext>(o => o.UseNpgsql(connection));
 builder.Services.AddIdentityCore<AppUser>(o =>
 {
@@ -36,14 +36,11 @@ builder.Services.AddHttpClient<KaspiClient>(client =>
     client.BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/");
     client.Timeout=TimeSpan.FromSeconds(30);
 });
-builder.Services.AddHostedService<KaspiSyncWorker>();
 builder.Services.AddScoped<CostImportService>();
 builder.Services.AddScoped<ExportBuilder>();
-builder.Services.AddHostedService<ExportWorker>();
 builder.Services.AddHttpClient<TelegramClient>(client=>client.Timeout=TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<NotificationDispatcher>();
-builder.Services.AddHostedService<NotificationDeliveryWorker>();
-builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();
+if(!useTestDatabase){builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
 builder.Services.AddRateLimiter(options=>
 {
     options.AddFixedWindowLimiter("auth",o=>{o.PermitLimit=10;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
@@ -67,7 +64,7 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="healthy", service="SellerFinance.Api", revision=config["RENDER_GIT_COMMIT"]?[..7] }));
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
-    ? Results.Ok(new { status="healthy", provider="PostgreSQL" })
+    ? Results.Ok(new { status="healthy", provider=db.Database.ProviderName })
     : Results.Problem("Database connection failed", statusCode:503));
 app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])?Results.Ok(new{status="ready",database="healthy",encryption="configured"}):Results.Problem("Service is not ready",statusCode:503));
 if(app.Environment.IsDevelopment()||builder.Configuration.GetValue<bool>("ENABLE_OPENAPI"))app.MapOpenApi();
@@ -295,6 +292,8 @@ api.MapGet("/costs/imports/template.xlsx",(HttpContext ctx)=>
 
 app.MapFallbackToFile("index.html");
 app.Run();
+
+public partial class Program;
 
 record RegisterRequest(string Email,string Password,string DisplayName,string OrganizationName);
 record LoginRequest(string Email,string Password,bool RememberMe=true);

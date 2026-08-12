@@ -1,0 +1,30 @@
+name: Production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Deployed Seller Finance URL
+        required: true
+        default: https://seller-finance.onrender.com
+      expected_revision:
+        description: Optional seven-character Git revision
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Production smoke
+        run: node scripts/production-smoke.mjs "${{ inputs.base_url }}" "${{ inputs.expected_revision }}"
+      - name: Safe warm load check
+        run: node scripts/load-smoke.mjs "${{ inputs.base_url }}/health" 40 5 800
+
