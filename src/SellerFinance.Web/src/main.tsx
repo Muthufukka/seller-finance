@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BarChart3, Box, ChevronDown, CircleAlert, Download, LayoutDashboard, LogIn, Menu, PackageSearch, RefreshCw, Search, Settings, ShoppingBag, Sparkles, TrendingDown, TrendingUp, WalletCards, X } from "lucide-react";
+import { BarChart3, Box, CircleAlert, Download, LayoutDashboard, LogIn, Menu, PackageSearch, RefreshCw, Search, Settings, ShoppingBag, Sparkles, TrendingDown, TrendingUp, WalletCards, X } from "lucide-react";
 import "./styles.css";
 import { AdminConsole } from "./AdminConsole";
 import { KaspiConnections } from "./KaspiConnections";
@@ -62,6 +62,7 @@ type Session = {
   trialEndsAt?: string;
   isSaasAdmin?: boolean;
 };
+type OrganizationOption = { id: string; name: string; role: string };
 type Order = {
   id: string;
   externalId?: string;
@@ -164,6 +165,7 @@ function App() {
     [completeCostsOnly, setCompleteCostsOnly] = useState(false);
   const [session, setSession] = useState<Session | null>(null),
     [authReady, setAuthReady] = useState(false);
+  const [organizations,setOrganizations]=useState<OrganizationOption[]>([]);
   const [summary, setSummary] = useState(fallback.summary),
     [products, setProducts] = useState(fallback.products),
     [points, setPoints] = useState(fallback.timeseries);
@@ -175,6 +177,7 @@ function App() {
       .then(async (r) => (r.ok ? setSession(await r.json()) : setSession(null)))
       .finally(() => setAuthReady(true));
   }, []);
+  useEffect(()=>{if(!session)return setOrganizations([]);fetch("/api/v1/organizations",{headers:{"X-Organization-Id":session.organizationId}}).then(r=>r.ok?r.json():[]).then(setOrganizations);},[session?.organizationId]);
   useEffect(() => {
     const invitationToken = new URLSearchParams(location.search).get("invitationToken");
     if (!session || !invitationToken) return;
@@ -228,11 +231,13 @@ function App() {
           </button>
           <div className="org">
             <span className="orgmark">{session.organizationName[0]}</span>
-            <div>
-              <b>{session.organizationName}</b>
+            <label>
+              <select value={session.organizationId} aria-label="Организация" onChange={async(e)=>{const r=await fetch("/api/v1/session",{headers:{"X-Organization-Id":e.target.value}});if(r.ok){setPage("dashboard");setSession(await r.json());}}}>
+                {organizations.length?organizations.map(o=><option key={o.id} value={o.id}>{o.name}</option>):<option value={session.organizationId}>{session.organizationName}</option>}
+              </select>
               <small>{session.role}</small>
-            </div>
-            <ChevronDown size={16} />
+            </label>
+            <button className="org-add" title="Создать организацию" aria-label="Создать организацию" onClick={async()=>{const name=window.prompt("Название новой организации");if(!name)return;const r=await fetch("/api/v1/organizations",{method:"POST",headers:{"X-Organization-Id":session.organizationId,"Content-Type":"application/json"},body:JSON.stringify({name})});if(!r.ok)return window.alert("Не удалось создать организацию");const created=await r.json();const selected=await fetch("/api/v1/session",{headers:{"X-Organization-Id":created.id}});if(selected.ok){setPage("dashboard");setSession(await selected.json());}}}>+</button>
           </div>
           <div className="head-actions">
             <button className="icon">

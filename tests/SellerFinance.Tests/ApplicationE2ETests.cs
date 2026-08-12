@@ -85,6 +85,14 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Authenticated_User_Can_Create_And_Switch_To_An_Isolated_Organization()
+    {
+        using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"multi-{Guid.NewGuid():N}@example.test";Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Multi",organizationName="First Org"})).StatusCode);var first=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");var firstId=first.GetProperty("organizationId").GetString()!;client.DefaultRequestHeaders.Add("X-Organization-Id",firstId);
+        Assert.Equal(HttpStatusCode.BadRequest,(await client.PostAsJsonAsync("/api/v1/organizations",new{name="X"})).StatusCode);var createdResponse=await client.PostAsJsonAsync("/api/v1/organizations",new{name="Second Org"});Assert.Equal(HttpStatusCode.Created,createdResponse.StatusCode);var created=(await createdResponse.Content.ReadFromJsonAsync<JsonElement>());var secondId=created.GetProperty("id").GetString()!;var organizations=await client.GetFromJsonAsync<JsonElement[]>("/api/v1/organizations");Assert.Contains(organizations!,x=>x.GetProperty("id").GetString()==secondId&&x.GetProperty("role").GetString()=="Owner");
+        client.DefaultRequestHeaders.Remove("X-Organization-Id");client.DefaultRequestHeaders.Add("X-Organization-Id",secondId);var second=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");Assert.Equal("Second Org",second.GetProperty("organizationName").GetString());Assert.Empty((await client.GetFromJsonAsync<JsonElement>("/api/v1/products")).GetProperty("items").EnumerateArray());await using var scope=factory.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.True(await db.Subscriptions.AnyAsync(x=>x.OrganizationId==secondId&&x.Status==SubscriptionStatus.Trialing));Assert.Equal(3,await db.NotificationRules.CountAsync(x=>x.OrganizationId==secondId));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==secondId&&x.Action=="organization.created"));
+    }
+
+    [Fact]
     public async Task Owner_Manages_Members_Invitations_And_Role_Boundaries()
     {
         using var ownerClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var ownerEmail=$"owner-{Guid.NewGuid():N}@example.test";const string password="PilotTest123";

@@ -147,6 +147,10 @@ api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext
     var userId=user.FindFirstValue(ClaimTypes.NameIdentifier)!;
     return Results.Ok(await (from m in db.OrganizationUsers.AsNoTracking() join o in db.Organizations on m.OrganizationId equals o.Id where m.UserId==userId&&m.JoinedAt!=null select new { o.Id,o.Name,role=m.Role.ToString() }).ToArrayAsync());
 });
+api.MapPost("/organizations",async(HttpContext ctx,CreateOrganizationRequest request,SellerFinanceDbContext db)=>
+{
+    var name=request.Name.Trim();if(name.Length is <2 or >120)return Results.BadRequest(new{title="Название должно содержать от 2 до 120 символов"});var userId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!;var organization=new OrganizationEntity{Id=Guid.NewGuid().ToString("N"),Name=name};db.Organizations.Add(organization);db.OrganizationUsers.Add(new(){OrganizationId=organization.Id,UserId=userId,Role=OrganizationRole.Owner,JoinedAt=DateTimeOffset.UtcNow});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId=organization.Id});db.NotificationRules.AddRange(Enum.GetValues<NotificationEventType>().Select(type=>new NotificationRuleEntity{Id=Guid.NewGuid(),OrganizationId=organization.Id,EventType=type,Enabled=true,Threshold=type==NotificationEventType.NegativeMargin?0m:null}));db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organization.Id,UserId=userId,Action="organization.created",EntityType="Organization",EntityId=organization.Id});await db.SaveChangesAsync();return Results.Created($"/api/v1/organizations/{organization.Id}",new{organization.Id,organization.Name,role="Owner"});
+}).RequireRateLimiting("sensitive");
 api.MapPut("/organizations/{id}",async(HttpContext ctx,string id,OrganizationSettingsRequest request,SellerFinanceDbContext db,CancellationToken ct)=>
 {
     var result=await OrganizationSettings.UpdateAsync(db,id,ctx.Membership(),request.Name,request.TimeZone,request.Currency,request.AllocateOrganizationExpenses,ct);
@@ -348,6 +352,7 @@ record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);
 record OrganizationSettingsRequest(string Name,string TimeZone,string Currency,bool AllocateOrganizationExpenses=false);
 record AcceptInvitationRequest(string Token);
+record CreateOrganizationRequest(string Name);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 record KaspiConnectionRequest(string Token,string? DisplayName=null);
 record FeeRuleRequest(string Scope,string ValueType,decimal Value,DateOnly EffectiveFrom,DateOnly? EffectiveTo,string? ProductId,string? Category);
