@@ -14,9 +14,9 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
         object[] source=job.ReportType.ToLowerInvariant() switch
         {
             "orders"=>await AllOrdersAsync(job),
-            "abc"=>await DbAnalytics.AbcAsync(db,job.OrganizationId,"profit",job.DateFrom,job.DateTo),
-            "missingcosts"=>(await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo)).Where(IsMissingCost).ToArray(),
-            _=>await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo)
+            "abc"=>await DbAnalytics.AbcAsync(db,job.OrganizationId,"profit",job.DateFrom,job.DateTo,job.CompleteCostsOnly),
+            "missingcosts"=>(await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo,job.CompleteCostsOnly)).Where(IsMissingCost).ToArray(),
+            _=>await DbAnalytics.ProductsAsync(db,job.OrganizationId,job.DateFrom,job.DateTo,job.CompleteCostsOnly)
         };
         var rows=JsonSerializer.SerializeToElement(source).EnumerateArray().ToArray();var columns=Columns(job.ReportType);
         return job.Format.Equals("csv",StringComparison.OrdinalIgnoreCase)?BuildCsv(job,rows,columns):BuildXlsx(job,rows,columns);
@@ -24,16 +24,16 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
 
     private async Task<object[]> AllOrdersAsync(ExportJobEntity job)
     {
-        var rows=new List<object>();for(var page=1;;page++){var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,job.OrganizationId,from:job.DateFrom,to:job.DateTo,page:page,pageSize:100));rows.AddRange(result.GetProperty("items").EnumerateArray().Select(x=>(object)x.Clone()));if(page>=result.GetProperty("totalPages").GetInt32())break;}return rows.ToArray();
+        var rows=new List<object>();for(var page=1;;page++){var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,job.OrganizationId,from:job.DateFrom,to:job.DateTo,page:page,pageSize:100,completeCostsOnly:job.CompleteCostsOnly));rows.AddRange(result.GetProperty("items").EnumerateArray().Select(x=>(object)x.Clone()));if(page>=result.GetProperty("totalPages").GetInt32())break;}return rows.ToArray();
     }
 
     private static bool IsMissingCost(object value){var json=JsonSerializer.SerializeToElement(value);return json.TryGetProperty("cost",out var cost)&&cost.ValueKind==JsonValueKind.Null;}
     private static (string Key,string Header)[] Columns(string report)=>report.ToLowerInvariant() switch
     {
-        "orders"=>[("externalId","Order code"),("storeName","Store"),("date","Date"),("status","Status"),("amount","Amount"),("fees","Fees"),("delivery","Delivery"),("profit","Profit"),("complete","Complete")],
+        "orders"=>[("externalId","Order code"),("storeName","Store"),("date","Date"),("status","Status"),("amount","Amount"),("cogs","COGS"),("fees","Fees"),("delivery","Delivery"),("otherExpenses","Other expenses"),("totalExpenses","Total expenses"),("profit","Profit"),("coveragePct","Coverage %"),("complete","Complete")],
         "abc"=>[("sku","SKU"),("name","Name"),("group","ABC"),("value","Value"),("revenue","Revenue"),("profit","Profit"),("units","Units"),("cumulativePct","Cumulative %")],
         "missingcosts"=>[("sku","SKU"),("name","Name"),("units","Units"),("revenue","Revenue"),("coveragePct","Coverage %")],
-        _=>[("sku","SKU"),("name","Name"),("units","Units"),("revenue","Revenue"),("cogs","COGS"),("profit","Profit"),("margin","Margin %"),("cost","Current cost"),("coveragePct","Coverage %")]
+        _=>[("sku","SKU"),("name","Name"),("units","Units"),("revenue","Revenue"),("cogs","COGS"),("marketplaceFees","Fees"),("delivery","Delivery"),("otherExpenses","Other expenses"),("profit","Profit"),("margin","Margin %"),("cost","Current cost"),("coveragePct","Coverage %")]
     };
 
     private static ExportArtifact BuildCsv(ExportJobEntity job,JsonElement[] rows,(string Key,string Header)[] columns)

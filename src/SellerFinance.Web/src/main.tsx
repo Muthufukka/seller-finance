@@ -256,7 +256,7 @@ function App() {
         {page === "integrations" && <KaspiConnections session={session} />}
         {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
         {page === "fees" && <Fees session={session} products={products} />}
-        {page === "exports" && <Exports session={session} />}
+        {page === "exports" && <Exports session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
         {page === "settings" && <SettingsPage session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
         {page === "admin" && session.isSaasAdmin && <AdminConsole session={session} />}
       </main>
@@ -1421,7 +1421,7 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
   );
 }
 
-function Exports({ session }: { session: Session }) {
+function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Session; dateFrom?:string; dateTo?:string; completeCostsOnly:boolean }) {
   const [jobs, setJobs] = useState<any[]>([]),
     [busy, setBusy] = useState(false);
   const headers = { "X-Organization-Id": session.organizationId };
@@ -1435,8 +1435,9 @@ function Exports({ session }: { session: Session }) {
       body: JSON.stringify({
         reportType: f.get("report"),
         format: f.get("format"),
-        dateFrom: null,
-        dateTo: null,
+        dateFrom: f.get("dateFrom") || null,
+        dateTo: f.get("dateTo") || null,
+        completeCostsOnly: f.get("completeCostsOnly") === "on",
       }),
     });
     if (r.ok) {
@@ -1482,6 +1483,9 @@ function Exports({ session }: { session: Session }) {
             <option value="xlsx">XLSX</option>
             <option value="csv">CSV UTF-8</option>
           </select>
+          <label className="export-date">С<input name="dateFrom" type="date" defaultValue={dateFrom}/></label>
+          <label className="export-date">По<input name="dateTo" type="date" min={dateFrom} defaultValue={dateTo}/></label>
+          <label className="export-complete"><input name="completeCostsOnly" type="checkbox" defaultChecked={completeCostsOnly}/>Только продажи с полной себестоимостью</label>
           <button className="primary" disabled={busy}>
             {busy ? "Создаём…" : "Сформировать"}
           </button>

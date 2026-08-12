@@ -128,6 +128,7 @@ public sealed class ExportJobEntity
     public string Format { get; set; } = "xlsx";
     public DateOnly? DateFrom { get; set; }
     public DateOnly? DateTo { get; set; }
+    public bool CompleteCostsOnly { get; set; }
     public ExportJobStatus Status { get; set; } = ExportJobStatus.Queued;
     public int RowCount { get; set; }
     public byte[]? FileContent { get; set; }
@@ -610,7 +611,7 @@ public static class DbAnalytics
         page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);
         var entities=await db.Orders.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
         var stores=await db.MarketplaceConnections.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id,x=>x.DisplayName);
-        var rows=(await FactsAsync(db,tenant,from,to)).Select(x=>{var f=FinanceCalculator.Calculate([x]);var entity=entities[x.Id];return new OrderListRow(x.Id,entity.ExternalId,entity.MarketplaceConnectionId,stores.GetValueOrDefault(entity.MarketplaceConnectionId,"Kaspi"),x.Date,x.Status.ToString().ToUpperInvariant(),x.Lines.Sum(y=>y.Revenue),x.Lines.Sum(y=>y.Quantity),f.OperatingProfit,f.MarketplaceFees,f.Delivery,x.Lines.All(y=>y.UnitCost.HasValue),entity.CalculationDateFallback,x.Lines.Select(y=>y.ProductId).ToArray());});
+        var rows=(await FactsAsync(db,tenant,from,to)).Select(x=>{var f=FinanceCalculator.Calculate([x]);var entity=entities[x.Id];var other=f.VariableCosts-f.MarketplaceFees-f.Delivery;return new OrderListRow(x.Id,entity.ExternalId,entity.MarketplaceConnectionId,stores.GetValueOrDefault(entity.MarketplaceConnectionId,"Kaspi"),x.Date,x.Status.ToString().ToUpperInvariant(),x.Lines.Sum(y=>y.Revenue),x.Lines.Sum(y=>y.Quantity),f.Cogs,f.MarketplaceFees,f.Delivery,other,f.Cogs.HasValue?f.Cogs.Value+f.VariableCosts:(decimal?)null,f.OperatingProfit,f.CoveragePct,x.Lines.All(y=>y.UnitCost.HasValue),entity.CalculationDateFallback,x.Lines.Select(y=>y.ProductId).ToArray());});
         if(!String.IsNullOrWhiteSpace(status))rows=rows.Where(x=>String.Equals(x.Status,status.Trim(),StringComparison.OrdinalIgnoreCase));
         if(!String.IsNullOrWhiteSpace(productId))rows=rows.Where(x=>x.ProductIds.Contains(productId));
         if(profitFrom.HasValue)rows=rows.Where(x=>x.Profit.HasValue&&x.Profit>=profitFrom);
@@ -618,11 +619,11 @@ public static class DbAnalytics
         if(!String.IsNullOrWhiteSpace(search))rows=rows.Where(x=>x.ExternalId.Contains(search.Trim(),StringComparison.OrdinalIgnoreCase));
         if(completeCostsOnly)rows=rows.Where(x=>x.Complete);
         var filtered=rows.OrderByDescending(x=>x.Date).ThenByDescending(x=>x.ExternalId).ToArray();var total=filtered.Length;
-        var items=filtered.Skip((page-1)*pageSize).Take(pageSize).Select(x=>new{id=x.Id,externalId=x.ExternalId,connectionId=x.ConnectionId,storeName=x.StoreName,date=x.Date,status=x.Status,amount=x.Amount,items=x.Items,profit=x.Profit,fees=x.Fees,delivery=x.Delivery,complete=x.Complete,calculationDateFallback=x.CalculationDateFallback}).ToArray();
+        var items=filtered.Skip((page-1)*pageSize).Take(pageSize).Select(x=>new{id=x.Id,externalId=x.ExternalId,connectionId=x.ConnectionId,storeName=x.StoreName,date=x.Date,status=x.Status,amount=x.Amount,items=x.Items,cogs=x.Cogs,fees=x.Fees,delivery=x.Delivery,otherExpenses=x.OtherExpenses,totalExpenses=x.TotalExpenses,profit=x.Profit,coveragePct=x.CoveragePct,complete=x.Complete,calculationDateFallback=x.CalculationDateFallback}).ToArray();
         return new{items,page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(decimal)pageSize)};
     }
 
-    private sealed record OrderListRow(string Id,string ExternalId,Guid ConnectionId,string StoreName,DateOnly Date,string Status,decimal Amount,int Items,decimal? Profit,decimal Fees,decimal Delivery,bool Complete,bool CalculationDateFallback,string[] ProductIds);
+    private sealed record OrderListRow(string Id,string ExternalId,Guid ConnectionId,string StoreName,DateOnly Date,string Status,decimal Amount,int Items,decimal? Cogs,decimal Fees,decimal Delivery,decimal OtherExpenses,decimal? TotalExpenses,decimal? Profit,decimal CoveragePct,bool Complete,bool CalculationDateFallback,string[] ProductIds);
 
     public static async Task<object[]> ProductsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
@@ -638,11 +639,11 @@ public static class DbAnalytics
             var revenue=own.Sum(x=>x.Revenue);
             var complete=own.All(x=>x.UnitCost.HasValue);
             var cogs=complete ? own.Sum(x=>x.UnitCost!.Value*x.Quantity) : (decimal?)null;
-            var costs=own.Sum(x=>(x.ActualFee ?? Decimal.Round(x.Revenue*x.FeeRate,4))+x.Delivery+x.OtherVariableCosts);
-            var directExpenses=productExpenses.GetValueOrDefault(p.Id);var allocatedOrganizationExpenses=allocatedExpenses.GetValueOrDefault(p.Id);var profit=cogs.HasValue ? revenue-cogs.Value-costs-directExpenses-allocatedOrganizationExpenses : (decimal?)null;
+            var marketplaceFees=own.Sum(x=>x.ActualFee ?? Decimal.Round(x.Revenue*x.FeeRate,4));var delivery=own.Sum(x=>x.Delivery);var orderExpenses=own.Sum(x=>x.OtherVariableCosts);
+            var directExpenses=productExpenses.GetValueOrDefault(p.Id);var allocatedOrganizationExpenses=allocatedExpenses.GetValueOrDefault(p.Id);var otherExpenses=orderExpenses+directExpenses+allocatedOrganizationExpenses;var profit=cogs.HasValue ? revenue-cogs.Value-marketplaceFees-delivery-otherExpenses : (decimal?)null;
             var margin=profit.HasValue&&revenue!=0 ? Decimal.Round(profit.Value/revenue*100m,1) : (decimal?)null;
             var current=histories.Where(x=>x.ProductId==p.Id&&x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow)).OrderByDescending(x=>x.EffectiveFrom).FirstOrDefault()?.CostAmount;
-            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, p.Category, p.ExternalProductId, productStatus=p.Status, units=own.Sum(x=>x.Quantity), revenue, cogs, directExpenses, allocatedOrganizationExpenses, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=p.Status=="Archived"?"archived":current.HasValue?"profitable":"missing-cost" };
+            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, p.Category, p.ExternalProductId, productStatus=p.Status, units=own.Sum(x=>x.Quantity), revenue, cogs, marketplaceFees, delivery, orderExpenses, directExpenses, allocatedOrganizationExpenses, otherExpenses, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=p.Status=="Archived"?"archived":current.HasValue?"profitable":"missing-cost" };
         }).ToArray();
     }
 
