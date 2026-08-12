@@ -50,6 +50,18 @@ public sealed class ProductCostsTests
     }
 
     [Fact]
+    public async Task Product_TimeSeries_Is_Tenant_Scoped_And_Explains_Daily_Result()
+    {
+        await using var db=CreateDb();db.Organizations.AddRange(new(){Id="org",Name="Org",AllocateOrganizationExpenses=true},new(){Id="other",Name="Other"});db.Products.AddRange(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"},new(){Id="p2",OrganizationId="org",Sku="SKU-2",Name="Second"},new(){Id="foreign",OrganizationId="other",Sku="SKU-X",Name="Foreign"});db.ProductCostHistory.Add(Cost(100,new(2026,1,1)));
+        db.Orders.Add(new(){Id="o1",ExternalId="e1",OrganizationId="org",Status=OrderStatus.Completed,Date=new(2026,8,12),CompletionDate=new(2026,8,12),Lines=[new(){Id=Guid.NewGuid(),OrderId="o1",ProductId="p1",Revenue=1000,Quantity=2,FeeRate=.1m,Delivery=100},new(){Id=Guid.NewGuid(),OrderId="o1",ProductId="p2",Revenue=1000,Quantity=1}]});
+        db.Expenses.AddRange(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",Type=ExpenseType.Advertising,Amount=100,Date=new(2026,8,12),CreatedByUserId="u"},new(){Id=Guid.NewGuid(),OrganizationId="org",Type=ExpenseType.Other,Amount=200,Date=new(2026,8,12),CreatedByUserId="u"},new(){Id=Guid.NewGuid(),OrganizationId="other",ProductId="foreign",Type=ExpenseType.Other,Amount=9999,Date=new(2026,8,12),CreatedByUserId="u"});await db.SaveChangesAsync();
+
+        var result=JsonSerializer.SerializeToElement(await DbAnalytics.ProductTimeSeriesAsync(db,"org","p1",new(2026,8,12),new(2026,8,12)));
+
+        Assert.Single(result.EnumerateArray());var day=result[0];Assert.Equal(2,day.GetProperty("units").GetInt32());Assert.Equal(1000,day.GetProperty("Revenue").GetDecimal());Assert.Equal(200,day.GetProperty("Cogs").GetDecimal());Assert.Equal(100,day.GetProperty("MarketplaceFees").GetDecimal());Assert.Equal(100,day.GetProperty("Delivery").GetDecimal());Assert.Equal(200,day.GetProperty("expenses").GetDecimal());Assert.Equal(400,day.GetProperty("OperatingProfit").GetDecimal());Assert.Equal(100,day.GetProperty("CoveragePct").GetDecimal());
+    }
+
+    [Fact]
     public async Task Csv_Import_Previews_Then_Confirms_Only_Valid_Rows()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});await db.SaveChangesAsync();

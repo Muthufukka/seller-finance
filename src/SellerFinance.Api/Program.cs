@@ -297,6 +297,11 @@ api.MapGet("/products/{id}",async(HttpContext ctx,string id,SellerFinanceDbConte
     var history=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync();
     return Results.Ok(new{product.Id,product.Sku,product.Name,product.Category,product.ExternalProductId,product.Status,currentCost=history.FirstOrDefault(x=>x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow))?.CostAmount,costHistory=history});
 });
+api.MapGet("/products/{id}/timeseries",async(HttpContext ctx,string id,SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo)=>(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)
+    ?Results.BadRequest(new{title="dateFrom cannot be later than dateTo"})
+    :!await db.Products.AsNoTracking().AnyAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant())
+        ?Results.NotFound()
+        :Results.Ok(await DbAnalytics.ProductTimeSeriesAsync(db,ctx.Tenant(),id,dateFrom,dateTo)));
 api.MapGet("/products/{id}/costs",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>Results.Ok(await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==ctx.Tenant()&&x.ProductId==id).OrderByDescending(x=>x.EffectiveFrom).Select(x=>new{x.Id,x.CostAmount,x.EffectiveFrom,source=x.Source.ToString(),x.CreatedAt}).ToArrayAsync()));
 api.MapPost("/costs/imports/preview",async(HttpContext ctx,IFormFile file,CostImportService imports,SellerFinanceDbContext db,CancellationToken ct)=>
 {

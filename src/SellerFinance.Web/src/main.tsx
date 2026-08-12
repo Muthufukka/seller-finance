@@ -35,6 +35,7 @@ type Product = {
   status: string;
 };
 type Point = { date: string; revenue: number; profit: number };
+type ProductPoint = { date: string; units: number; revenue: number; cogs: number | null; marketplaceFees: number; delivery: number; otherVariableCosts: number; expenses: number; operatingProfit: number; operatingMarginPct: number | null; coveragePct: number; isPreliminary: boolean };
 type Page = "dashboard" | "products" | "orders" | "abc" | "integrations" | "expenses" | "fees" | "exports" | "settings" | "admin";
 type Session = {
   userId: string;
@@ -236,7 +237,7 @@ function App() {
           </div>
         </header>
         {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} />}
-        {page === "products" && <Products products={products} session={session} />}
+        {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} />}
         {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "integrations" && <KaspiConnections session={session} />}
@@ -1811,19 +1812,30 @@ function ProductTable({ products }: { products: Product[] }) {
     </div>
   );
 }
-function Products({ products, session }: { products: Product[]; session: Session }) {
+function Products({ products, session, dateFrom, dateTo }: { products: Product[]; session: Session; dateFrom?: string; dateTo?: string }) {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [selected, setSelected] = useState<Product | null>(null),
     [detail, setDetail] = useState<any>(null),
+    [series, setSeries] = useState<ProductPoint[]>([]),
+    [seriesLoading, setSeriesLoading] = useState(false),
     [preview, setPreview] = useState<any>(null),
     [message, setMessage] = useState("");
   const headers = { "X-Organization-Id": session.organizationId };
   const filtered = products.filter((p) => (p.sku + " " + p.name).toLowerCase().includes(search.toLowerCase()) && (filter === "all" || (filter === "missing" && p.cost === null) || (filter === "profitable" && (p.profit ?? 0) > 0) || (filter === "loss" && (p.profit ?? 0) < 0)));
   const open = async (p: Product) => {
     setSelected(p);
-    const r = await fetch(`/api/v1/products/${p.id}`, { headers });
-    if (r.ok) setDetail(await r.json());
+    setDetail(null);
+    setSeries([]);
+    setSeriesLoading(true);
+    const query = new URLSearchParams();
+    if (dateFrom) query.set("dateFrom", dateFrom);
+    if (dateTo) query.set("dateTo", dateTo);
+    const [detailResponse, seriesResponse] = await Promise.all([fetch(`/api/v1/products/${p.id}`, { headers }), fetch(`/api/v1/products/${p.id}/timeseries?${query}`, { headers })]);
+    if (detailResponse.ok) setDetail(await detailResponse.json());
+    if (seriesResponse.ok) setSeries(await seriesResponse.json());
+    else setMessage("Не удалось загрузить динамику товара");
+    setSeriesLoading(false);
   };
   const upload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1937,6 +1949,24 @@ function Products({ products, session }: { products: Product[]; session: Session
             </button>
             <span className="eyebrow">{selected.sku}</span>
             <h2>{selected.name}</h2>
+            <div className="product-chart-head">
+              <div>
+                <h3>Динамика товара</h3>
+                <p>{dateFrom && dateTo ? `${new Date(dateFrom).toLocaleDateString("ru-RU")} — ${new Date(dateTo).toLocaleDateString("ru-RU")}` : "За весь период"}</p>
+              </div>
+              <div className="legend"><span><i className="revenue" />Выручка</span><span><i className="profit" />Прибыль</span></div>
+            </div>
+            {seriesLoading ? <p className="muted">Загрузка динамики…</p> : series.length ? (
+              <div className="product-chart" aria-label="Выручка и прибыль товара по дням">
+                {series.map((point) => {
+                  const scale=Math.max(...series.flatMap(x=>[Math.abs(x.revenue),Math.abs(x.operatingProfit)]),1);
+                  return <div className="product-bar" key={point.date} title={`${new Date(point.date).toLocaleDateString("ru-RU")}: выручка ${money(point.revenue)}, прибыль ${money(point.operatingProfit)}, Coverage ${pct(point.coveragePct)}`}>
+                    <div><i className="profit-bar" style={{height:`${Math.max(2,Math.abs(point.operatingProfit)/scale*100)}%`}}/><i className="revenue-bar" style={{height:`${Math.max(2,Math.abs(point.revenue)/scale*100)}%`}}/></div>
+                    <small>{new Date(point.date).toLocaleDateString("ru-RU",{day:"2-digit",month:"short"})}</small>
+                  </div>;
+                })}
+              </div>
+            ) : <p className="product-chart-empty">За выбранный период продаж и расходов по товару нет.</p>}
             <form className="cost-form" onSubmit={addCost}>
               <label>
                 Себестоимость

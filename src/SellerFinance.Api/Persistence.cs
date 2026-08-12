@@ -565,6 +565,33 @@ public static class DbAnalytics
         return groups.Keys.Union(expenses.Keys).OrderBy(x=>x).Select(date=>{var f=FinanceCalculator.Calculate(groups.GetValueOrDefault(date)??[],expenses.GetValueOrDefault(date));return(object)new{date,revenue=f.Revenue,profit=f.OperatingProfit};}).ToArray();
     }
 
+    public static async Task<object[]> ProductTimeSeriesAsync(SellerFinanceDbContext db,string tenant,string productId,DateOnly? from=null,DateOnly? to=null)
+    {
+        var facts=(await FactsAsync(db,tenant,from,to)).Where(x=>x.Status==OrderStatus.Completed).ToArray();
+        var productFacts=facts.Select(x=>x with{Lines=x.Lines.Where(y=>y.ProductId==productId).ToArray()}).Where(x=>x.Lines.Count>0).ToArray();
+        var directRows=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId==productId&&x.OrderId==null&&(!from.HasValue||(x.PeriodEnd??x.Date)>=from)&&(!to.HasValue||x.Date<=to)).ToArrayAsync();
+        var directByDay=ExpenseRecognition.ByDay(directRows,from,to);
+        Dictionary<DateOnly,decimal> allocatedByDay=[];
+        var allocate=await db.Organizations.AsNoTracking().Where(x=>x.Id==tenant).Select(x=>x.AllocateOrganizationExpenses).SingleOrDefaultAsync();
+        if(allocate)
+        {
+            var organizationRows=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId==null&&x.OrderId==null&&(!from.HasValue||(x.PeriodEnd??x.Date)>=from)&&(!to.HasValue||x.Date<=to)).ToArrayAsync();
+            foreach(var expense in ExpenseRecognition.ByDay(organizationRows,from,to))
+            {
+                var revenues=facts.Where(x=>x.Date==expense.Key).SelectMany(x=>x.Lines).GroupBy(x=>x.ProductId).OrderBy(x=>x.Key).Select(x=>new{ProductId=x.Key,Revenue=x.Sum(y=>y.Revenue)}).Where(x=>x.Revenue>0).ToArray();
+                if(revenues.Length==0)continue;
+                var allocations=FinanceCalculator.AllocateByRevenue(expense.Value,revenues.Select(x=>x.Revenue).ToArray());
+                var index=Array.FindIndex(revenues,x=>x.ProductId==productId);if(index>=0)allocatedByDay[expense.Key]=allocations[index];
+            }
+        }
+        var groups=productFacts.GroupBy(x=>x.Date).ToDictionary(x=>x.Key,x=>(IEnumerable<OrderFact>)x);
+        return groups.Keys.Union(directByDay.Keys).Union(allocatedByDay.Keys).OrderBy(x=>x).Select(date=>
+        {
+            var orders=groups.GetValueOrDefault(date)?.ToArray()??[];var expenses=directByDay.GetValueOrDefault(date)+allocatedByDay.GetValueOrDefault(date);var result=FinanceCalculator.Calculate(orders,expenses);var lines=orders.SelectMany(x=>x.Lines).ToArray();
+            return(object)new{date,units=lines.Sum(x=>x.Quantity),result.Revenue,result.Cogs,result.MarketplaceFees,result.Delivery,otherVariableCosts=result.VariableCosts-result.MarketplaceFees-result.Delivery,expenses,result.OperatingProfit,result.OperatingMarginPct,result.CoveragePct,result.IsPreliminary};
+        }).ToArray();
+    }
+
     public static async Task<object> OrdersAsync(SellerFinanceDbContext db, string tenant, string? status=null,
         DateOnly? from=null, DateOnly? to=null, string? productId=null, decimal? profitFrom=null,
         decimal? profitTo=null, string? search=null, int page=1, int pageSize=50,bool completeCostsOnly=false)

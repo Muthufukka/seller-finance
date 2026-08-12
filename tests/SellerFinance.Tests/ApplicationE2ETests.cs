@@ -35,9 +35,12 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         var expense=await client.PostAsJsonAsync("/api/v1/expenses",new{type="Advertising",amount=1250.50m,date="2026-08-12",comment="e2e"});
         Assert.Equal(HttpStatusCode.Created,expense.StatusCode);
         Assert.Single((await (await client.GetAsync("/api/v1/expenses")).Content.ReadFromJsonAsync<JsonElement[]>())!);
+        const string productId="e2e-product";await using(var scope=factory.Services.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.Products.Add(new(){Id=productId,OrganizationId=organizationId,Sku="E2E-SKU",Name="E2E Product"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,ProductId=productId,CostAmount=400,EffectiveFrom=new(2026,1,1),Source=CostSource.Manual,CreatedByUserId="e2e"});db.Orders.Add(new(){Id="e2e-order",ExternalId="e2e-order",OrganizationId=organizationId,Status=SellerFinance.Domain.OrderStatus.Completed,Date=new(2026,8,12),CompletionDate=new(2026,8,12),Lines=[new(){Id=Guid.NewGuid(),OrderId="e2e-order",ProductId=productId,Revenue=1000,Quantity=1}]});await db.SaveChangesAsync();}
+        var productSeries=await client.GetFromJsonAsync<JsonElement[]>($"/api/v1/products/{productId}/timeseries?dateFrom=2026-08-01&dateTo=2026-08-31");Assert.NotNull(productSeries);Assert.Single(productSeries);Assert.Equal(1000,productSeries[0].GetProperty("revenue").GetDecimal());
 
         client.DefaultRequestHeaders.Remove("X-Organization-Id");client.DefaultRequestHeaders.Add("X-Organization-Id","demo-organization");
         Assert.Equal(HttpStatusCode.NotFound,(await client.GetAsync("/api/v1/products")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,(await client.GetAsync($"/api/v1/products/{productId}/timeseries")).StatusCode);
         client.DefaultRequestHeaders.Remove("X-Organization-Id");client.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);
 
         var deletion=await client.SendAsync(new(HttpMethod.Delete,$"/api/v1/organizations/{organizationId}"){Content=JsonContent.Create(new{organizationName="E2E Updated",password})});
