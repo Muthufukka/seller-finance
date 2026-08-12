@@ -58,6 +58,14 @@ const abcRu={
 const abcKk:Record<keyof typeof abcRu,string>={
   "abc.eyebrow":"АССОРТИМЕНТ","abc.title":"ABC-талдау","abc.lead":"Жинақталған үлесі 80/15/5 бойынша A/B/C топтары.","abc.metric":"ABC-талдау метрикасы","abc.operatingProfit":"Операциялық пайда","abc.grossProfit":"Жалпы пайда","abc.revenue":"Түсім","abc.units":"Саны","abc.group":"Топ","abc.product":"Тауар","abc.value":"Мәні","abc.expenses":"Шығындар","abc.profit":"Пайда","abc.cumulative":"Жинақталған","abc.loading":"ABC-талдау жүктелуде…","abc.error":"ABC-талдауды жүктеу мүмкін болмады","abc.empty":"Таңдалған кезеңде ABC-талдау үшін дерек жоқ."
 };
+const adminRu={
+  "admin.operationError":"Операция не выполнена","admin.saved":"Изменения сохранены","admin.loadError":"Не удалось загрузить данные SaaS Admin","admin.blockReason":"Причина блокировки без персональных данных и секретов:","admin.eyebrow":"SAAS ADMIN","admin.title":"Управление платформой","admin.lead":"Организации, инциденты синхронизации, feature flags и системный аудит.","admin.organizations":"Организации","admin.tenants":"организаций","admin.organization":"Организация","admin.plan":"Тариф","admin.status":"Статус","admin.users":"Пользователи","admin.sync":"Sync","admin.activity":"Активность","admin.noData":"нет данных","admin.active":"Активна","admin.suspended":"Заблокирована","admin.block":"Заблокировать","admin.activate":"Активировать","admin.flags":"Feature flags","admin.selected":"Выбранная организация","admin.enabled":"Включено","admin.disabled":"Отключено","admin.audit":"Системный аудит","admin.noActions":"Действий пока нет.","admin.jobs":"Sync jobs и инциденты","admin.noTokenAccess":"Без доступа к Kaspi token","admin.created":"Создано","admin.attempts":"Попытки","admin.orders":"Заказы","admin.safeError":"Безопасная ошибка","admin.retry":"Повторить","admin.loading":"Загрузка…","admin.queued":"В очереди","admin.running":"Выполняется","admin.succeeded":"Завершено","admin.retryScheduled":"Повтор запланирован","admin.requiresAttention":"Требует внимания",
+  "table.product":"Товар","table.revenue":"Выручка","table.profit":"Прибыль","table.margin":"Маржа"
+} as const;
+const adminKk:Record<keyof typeof adminRu,string>={
+  "admin.operationError":"Операция орындалмады","admin.saved":"Өзгерістер сақталды","admin.loadError":"SaaS Admin деректерін жүктеу мүмкін болмады","admin.blockReason":"Жеке деректер мен құпияларсыз бұғаттау себебі:","admin.eyebrow":"SAAS ADMIN","admin.title":"Платформаны басқару","admin.lead":"Ұйымдар, синхрондау оқиғалары, feature flags және жүйелік аудит.","admin.organizations":"Ұйымдар","admin.tenants":"ұйым","admin.organization":"Ұйым","admin.plan":"Тариф","admin.status":"Күйі","admin.users":"Пайдаланушылар","admin.sync":"Sync","admin.activity":"Белсенділік","admin.noData":"дерек жоқ","admin.active":"Белсенді","admin.suspended":"Бұғатталған","admin.block":"Бұғаттау","admin.activate":"Белсендіру","admin.flags":"Feature flags","admin.selected":"Таңдалған ұйым","admin.enabled":"Қосылған","admin.disabled":"Өшірілген","admin.audit":"Жүйелік аудит","admin.noActions":"Әрекеттер әзірге жоқ.","admin.jobs":"Sync тапсырмалары мен оқиғалар","admin.noTokenAccess":"Kaspi token-ге қолжетімсіз","admin.created":"Құрылды","admin.attempts":"Әрекеттер","admin.orders":"Тапсырыстар","admin.safeError":"Қауіпсіз қате","admin.retry":"Қайталау","admin.loading":"Жүктелуде…","admin.queued":"Кезекте","admin.running":"Орындалуда","admin.succeeded":"Аяқталды","admin.retryScheduled":"Қайталау жоспарланды","admin.requiresAttention":"Назар аудару қажет",
+  "table.product":"Тауар","table.revenue":"Түсім","table.profit":"Пайда","table.margin":"Маржа"
+};
 
 export const ru = {
   ...ordersRu,
@@ -68,6 +76,7 @@ export const ru = {
   ...settingsRu,
   ...kaspiRu,
   ...abcRu,
+  ...adminRu,
   "brand.name": "Seller Finance",
   "common.wait": "Подождите…",
   "common.logout": "выйти",
@@ -136,6 +145,7 @@ const kk:Record<TranslationKey,string>={
   ...settingsKk,
   ...kaspiKk,
   ...abcKk,
+  ...adminKk,
   "brand.name":"Seller Finance","common.wait":"Күте тұрыңыз…","common.logout":"шығу","common.create":"Құру",
   "auth.login.title":"Кіру","auth.login.lead":"Пайда мен өзіндік құнды бір жерден басқарыңыз.","auth.login.submit":"Кіру",
   "auth.register.title":"Тіркелгі ашу","auth.register.lead":"Сатушының қорғалған жұмыс кеңістігін құрыңыз.","auth.register.submit":"Тіркелу","auth.register.name":"Атыңыз","auth.register.organization":"Ұйым атауы",

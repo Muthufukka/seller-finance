@@ -267,7 +267,7 @@ function App() {
         {page === "fees" && <Fees session={session} products={products} />}
         {page === "exports" && <Exports key={session.organizationId} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
         {page === "settings" && <SettingsPage key={session.organizationId} session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
-        {page === "admin" && session.isSaasAdmin && <AdminConsole session={session} />}
+        {page === "admin" && session.isSaasAdmin && <AdminConsole key={session.organizationId} session={session} />}
       </main>
     </div>
   );
@@ -1897,15 +1897,16 @@ function AdminPage({ session }: { session: Session }) {
   );
 }
 function ProductTable({ products, onSelect }: { products: Product[]; onSelect?:(product:Product)=>void }) {
+  const { t } = useI18n();
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Товар</th>
-            <th>Выручка</th>
-            <th>Прибыль</th>
-            <th>Маржа</th>
+            <th>{t("table.product")}</th>
+            <th>{t("table.revenue")}</th>
+            <th>{t("table.profit")}</th>
+            <th>{t("table.margin")}</th>
           </tr>
         </thead>
         <tbody>
