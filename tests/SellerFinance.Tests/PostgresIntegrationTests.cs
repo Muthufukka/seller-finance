@@ -36,6 +36,14 @@ public sealed class PostgresIntegrationTests
         async Task<bool> Confirm(){await using var db=CreateDb();try{await new FinancialImportService(db).ConfirmAsync(jobId,"org","user",default);return true;}catch(FinancialImportException){return false;}}var results=await Task.WhenAll(Confirm(),Confirm());Assert.Single(results,x=>x);await using var verify=CreateDb();Assert.Equal(1,await verify.Expenses.CountAsync());Assert.Equal(FinancialImportStatus.Applied,(await verify.FinancialImportJobs.SingleAsync()).Status);
     }
 
+    [Fact]
+    public async Task Composite_Foreign_Keys_Reject_CrossTenant_Relationships_On_PostgreSql()
+    {
+        if(ConnectionString is null)return;await ResetDatabaseAsync();var connection=Guid.NewGuid();await using(var setup=CreateDb()){await setup.Database.MigrateAsync();setup.Organizations.AddRange(new(){Id="org-a",Name="A"},new(){Id="org-b",Name="B"});setup.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org-b",DisplayName="B"});setup.Products.Add(new(){Id="product-a",OrganizationId="org-a",Sku="A",Name="A"});await setup.SaveChangesAsync();}
+        await using(var sync=CreateDb()){sync.SyncJobs.Add(new(){Id=Guid.NewGuid(),OrganizationId="org-a",MarketplaceConnectionId=connection,WindowFrom=DateTimeOffset.UtcNow.AddDays(-1),WindowTo=DateTimeOffset.UtcNow});var error=await Assert.ThrowsAsync<DbUpdateException>(()=>sync.SaveChangesAsync());Assert.Equal(PostgresErrorCodes.ForeignKeyViolation,((PostgresException)error.InnerException!).SqlState);}
+        await using(var expense=CreateDb()){expense.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org-b",ProductId="product-a",Type=ExpenseType.Other,Amount=100,Date=new(2026,8,1),CreatedByUserId="user"});var error=await Assert.ThrowsAsync<DbUpdateException>(()=>expense.SaveChangesAsync());Assert.Equal(PostgresErrorCodes.ForeignKeyViolation,((PostgresException)error.InnerException!).SqlState);}
+    }
+
     private static ProductCostHistoryEntity Cost(Guid id)=>new(){Id=id,OrganizationId="pg-org",ProductId="pg-product",CostAmount=100,EffectiveFrom=new(2026,8,1),CreatedByUserId="user"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseNpgsql(ConnectionString!).Options);
     private static async Task ResetDatabaseAsync(){await using var connection=new NpgsqlConnection(ConnectionString);await connection.OpenAsync();await using var command=new NpgsqlCommand("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",connection);await command.ExecuteNonQueryAsync();}
