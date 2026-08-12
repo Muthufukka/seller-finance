@@ -13,7 +13,7 @@ builder.Services.AddDbContext<SellerFinanceDbContext>(o => o.UseNpgsql(connectio
 builder.Services.AddIdentityCore<AppUser>(o =>
 {
     o.User.RequireUniqueEmail = true;
-    o.SignIn.RequireConfirmedEmail = false; // SMTP provider is configured in the next delivery slice.
+    o.SignIn.RequireConfirmedEmail = builder.Configuration.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED");
     o.Password.RequiredLength = 10;
     o.Password.RequireNonAlphanumeric = false;
 }).AddEntityFrameworkStores<SellerFinanceDbContext>().AddSignInManager().AddDefaultTokenProviders();
@@ -49,6 +49,7 @@ builder.Services.AddRateLimiter(options=>
     options.RejectionStatusCode=429;
 });
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton<EmailDelivery>();
 
 var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
@@ -70,11 +71,12 @@ app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDb
 app.MapPost("/api/v1/telegram/webhook/{secret}",async(string secret,HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 
 var auth = app.MapGroup("/api/v1/auth");
-auth.MapPost("/register", async (RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
+auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config) =>
 {
     if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
         return Results.BadRequest(new { title="Укажите название организации" });
-    var user = new AppUser { UserName=request.Email.Trim().ToLowerInvariant(), Email=request.Email.Trim().ToLowerInvariant(), DisplayName=request.DisplayName.Trim(), EmailConfirmed=true };
+    var confirmationRequired=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED");if(confirmationRequired&&!email.IsConfigured)return Results.Problem("Email delivery не настроен",statusCode:503);
+    var user = new AppUser { UserName=request.Email.Trim().ToLowerInvariant(), Email=request.Email.Trim().ToLowerInvariant(), DisplayName=request.DisplayName.Trim(), EmailConfirmed=!confirmationRequired };
     var result = await users.CreateAsync(user, request.Password);
     if (!result.Succeeded) return Results.ValidationProblem(result.Errors.GroupBy(x=>x.Code).ToDictionary(x=>x.Key,x=>x.Select(y=>y.Description).ToArray()));
     var organization = new OrganizationEntity { Id=Guid.NewGuid().ToString("N"), Name=request.OrganizationName.Trim() };
@@ -82,9 +84,10 @@ auth.MapPost("/register", async (RegisterRequest request, UserManager<AppUser> u
     db.OrganizationUsers.Add(new() { OrganizationId=organization.Id, UserId=user.Id, Role=OrganizationRole.Owner, JoinedAt=DateTimeOffset.UtcNow });
     db.AuditLogs.Add(new() { Id=Guid.NewGuid(), OrganizationId=organization.Id, UserId=user.Id, Action="organization.created", EntityType="Organization", EntityId=organization.Id });
     await db.SaveChangesAsync();
-    await signIn.SignInAsync(user, isPersistent:true);
-    return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
+    if(confirmationRequired){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";if(!await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted))return Results.Problem("Не удалось отправить письмо подтверждения",statusCode:503);return Results.Ok(new{emailConfirmationRequired=true});}
+    await signIn.SignInAsync(user, isPersistent:true);return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
 }).RequireRateLimiting("auth");
+auth.MapGet("/confirm-email",async(string userId,string token,UserManager<AppUser> users)=>{var user=await users.FindByIdAsync(userId);if(user is null)return Results.BadRequest("Недействительная ссылка");var result=await users.ConfirmEmailAsync(user,token);return result.Succeeded?Results.Content("Email подтверждён. Вернитесь в Seller Finance.","text/plain; charset=utf-8"):Results.BadRequest("Ссылка недействительна или истекла");}).RequireRateLimiting("auth");
 auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
@@ -95,10 +98,10 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
     return Results.Ok(new { status="authenticated" });
 }).RequireRateLimiting("auth");
 auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
-auth.MapPost("/forgot-password", async (ForgotPasswordRequest request, UserManager<AppUser> users) =>
+auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
-    if (user is not null) _ = await users.GeneratePasswordResetTokenAsync(user);
+    if (user is not null&&email.IsConfigured){var token=await users.GeneratePasswordResetTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/?resetEmail={Uri.EscapeDataString(user.Email!)}&resetToken={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Сброс пароля Seller Finance",EmailDelivery.ResetHtml(url),context.RequestAborted);}
     return Results.Ok(new { message="Если аккаунт существует, инструкция будет отправлена на email." });
 }).RequireRateLimiting("auth");
 auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users) =>

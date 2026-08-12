@@ -21,3 +21,13 @@ services:
         sync: false
       - key: SAAS_ADMIN_EMAIL
         sync: false
+      - key: EMAIL_CONFIRMATION_REQUIRED
+        value: "false"
+      - key: EMAIL_SMTP_HOST
+        sync: false
+      - key: EMAIL_SMTP_USER
+        sync: false
+      - key: EMAIL_SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
