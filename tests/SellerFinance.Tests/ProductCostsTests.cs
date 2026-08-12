@@ -25,6 +25,14 @@ public sealed class ProductCostsTests
     }
 
     [Fact]
+    public async Task Missing_History_Never_Becomes_Zero_Cost()
+    {
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.Orders.Add(new(){Id="o1",ExternalId="e1",OrganizationId="org",Status=OrderStatus.Completed,Date=new(2026,2,15),CompletionDate=new(2026,2,15),Lines=[new(){Id=Guid.NewGuid(),OrderId="o1",ProductId="p1",Revenue=500,Quantity=2}]});await db.SaveChangesAsync();
+        var result=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org"));
+        Assert.Equal(JsonValueKind.Null,result.GetProperty("Cogs").ValueKind);Assert.Equal(0,result.GetProperty("CoveragePct").GetDecimal());Assert.True(result.GetProperty("IsPreliminary").GetBoolean());
+    }
+
+    [Fact]
     public async Task Csv_Import_Previews_Then_Confirms_Only_Valid_Rows()
     {
         await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});await db.SaveChangesAsync();

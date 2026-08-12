@@ -44,7 +44,7 @@ public sealed class SaasFeaturesTests
     [Fact]
     public async Task ExportBuilder_Exports_Paginated_Order_Source()
     {
-        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.Orders.Add(new(){Id="order-1",ExternalId="KSP-1",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="order-1",ProductId="p1",Revenue=1500m,Quantity=1,UnitCost=500m}]});await db.SaveChangesAsync();
+        await using var db=CreateDb();db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU-1",Name="Product"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=500m,EffectiveFrom=new(2026,1,1),CreatedByUserId="test"});db.Orders.Add(new(){Id="order-1",ExternalId="KSP-1",OrganizationId="org",Date=new(2026,8,12),CompletionDate=new(2026,8,12),Status=SellerFinance.Domain.OrderStatus.Completed,Lines=[new(){Id=Guid.NewGuid(),OrderId="order-1",ProductId="p1",Revenue=1500m,Quantity=1}]});await db.SaveChangesAsync();
         var artifact=await new ExportBuilder(db).BuildAsync(Job("csv","Orders"),CancellationToken.None);var text=Encoding.UTF8.GetString(artifact.Content);
         Assert.Contains("KSP-1",text);Assert.Equal(1,artifact.RowCount);
     }

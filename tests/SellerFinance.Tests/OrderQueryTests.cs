@@ -12,6 +12,7 @@ public sealed class OrderQueryTests
     {
         await using var db=CreateDb();
         db.Products.AddRange(Product("p1","org-a","A"),Product("p2","org-a","B"),Product("foreign","org-b","X"));
+        db.ProductCostHistory.AddRange(Cost("p1","org-a"),Cost("p2","org-a"),Cost("foreign","org-b"));
         db.Orders.AddRange(Order("a-1","org-a","p1",new(2026,8,1),OrderStatus.Completed,1000),Order("a-2","org-a","p2",new(2026,8,2),OrderStatus.Cancelled,2000),Order("b-1","org-b","foreign",new(2026,8,3),OrderStatus.Completed,9999));
         await db.SaveChangesAsync();
 
@@ -26,7 +27,7 @@ public sealed class OrderQueryTests
     [Fact]
     public async Task OrdersAsync_Applies_Date_And_Profit_Range()
     {
-        await using var db=CreateDb();db.Products.Add(Product("p1","org","A"));
+        await using var db=CreateDb();db.Products.Add(Product("p1","org","A"));db.ProductCostHistory.Add(Cost("p1","org"));
         db.Orders.AddRange(Order("low","org","p1",new(2026,8,1),OrderStatus.Completed,1000),Order("high","org","p1",new(2026,8,10),OrderStatus.Completed,5000));await db.SaveChangesAsync();
 
         var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,"org",from:new(2026,8,5),profitFrom:4000,pageSize:50));
@@ -36,6 +37,7 @@ public sealed class OrderQueryTests
     }
 
     private static ProductEntity Product(string id,string org,string sku)=>new(){Id=id,OrganizationId=org,Sku=sku,Name=sku};
-    private static OrderEntity Order(string id,string org,string product,DateOnly date,OrderStatus status,decimal revenue)=>new(){Id=id,ExternalId=id,OrganizationId=org,Date=date,CompletionDate=date,Status=status,Lines=[new(){Id=Guid.NewGuid(),OrderId=id,ProductId=product,Revenue=revenue,Quantity=1,UnitCost=100m}]};
+    private static ProductCostHistoryEntity Cost(string product,string org)=>new(){Id=Guid.NewGuid(),OrganizationId=org,ProductId=product,CostAmount=100m,EffectiveFrom=new(2026,1,1),Source=CostSource.Manual,CreatedByUserId="test"};
+    private static OrderEntity Order(string id,string org,string product,DateOnly date,OrderStatus status,decimal revenue)=>new(){Id=id,ExternalId=id,OrganizationId=org,Date=date,CompletionDate=date,Status=status,Lines=[new(){Id=Guid.NewGuid(),OrderId=id,ProductId=product,Revenue=revenue,Quantity=1}]};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 }

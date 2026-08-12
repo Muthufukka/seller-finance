@@ -44,7 +44,6 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrderLineEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderLineEntity>().HasIndex(x => new { x.OrderId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Revenue).HasPrecision(19, 4);
-        modelBuilder.Entity<OrderLineEntity>().Property(x => x.UnitCost).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.ActualFee).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.FeeRate).HasPrecision(9, 6);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Delivery).HasPrecision(19, 4);
@@ -378,7 +377,6 @@ public sealed class ProductEntity
     public string Sku { get; set; } = "";
     public string Name { get; set; } = "";
     public string? Category { get; set; }
-    public decimal? CurrentCost { get; set; }
 }
 
 public sealed class OrderEntity
@@ -402,7 +400,6 @@ public sealed class OrderLineEntity
     public string ProductId { get; set; } = "";
     public decimal Revenue { get; set; }
     public int Quantity { get; set; }
-    public decimal? UnitCost { get; set; }
     public decimal? ActualFee { get; set; }
     public decimal FeeRate { get; set; }
     public decimal Delivery { get; set; }
@@ -455,17 +452,18 @@ public static class DatabaseSeed
         db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId});
         db.MarketplaceConnections.Add(new(){Id=DemoConnectionId,OrganizationId=DemoTenantId,DisplayName="Demo data",Status=MarketplaceConnectionStatus.Disabled});
         db.Products.AddRange(
-            new ProductEntity { Id="p1", OrganizationId=DemoTenantId, Sku="HOME-101", Name="Органайзер для кухни", CurrentCost=7200m },
-            new ProductEntity { Id="p2", OrganizationId=DemoTenantId, Sku="BEAUTY-220", Name="Набор косметичек", CurrentCost=8900m },
-            new ProductEntity { Id="p3", OrganizationId=DemoTenantId, Sku="TECH-044", Name="Настольная LED-лампа", CurrentCost=9100m },
+            new ProductEntity { Id="p1", OrganizationId=DemoTenantId, Sku="HOME-101", Name="Органайзер для кухни" },
+            new ProductEntity { Id="p2", OrganizationId=DemoTenantId, Sku="BEAUTY-220", Name="Набор косметичек" },
+            new ProductEntity { Id="p3", OrganizationId=DemoTenantId, Sku="TECH-044", Name="Настольная LED-лампа" },
             new ProductEntity { Id="p4", OrganizationId=DemoTenantId, Sku="KIDS-018", Name="Развивающий набор" });
 
-        db.Orders.AddRange(ToEntity("KSP-10482", new(2026,8,6), "p1", 24990m,2,7200m,null,.109m,700m),
-            ToEntity("KSP-10497", new(2026,8,7), "p2",18490m,1,8900m,null,.109m,450m),
-            ToEntity("KSP-10511", new(2026,8,8), "p3",42900m,3,9100m,4200m,.109m,900m),
-            ToEntity("KSP-10529", new(2026,8,9), "p4",12990m,1,null,null,.12m,350m),
-            ToEntity("KSP-10543", new(2026,8,10), "p1",37485m,3,7200m,null,.109m,800m),
-            ToEntity("KSP-10561", new(2026,8,11), "p2",36980m,2,8900m,null,.109m,650m));
+        db.ProductCostHistory.AddRange(new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId,ProductId="p1",CostAmount=7200m,EffectiveFrom=new(2026,1,1),Source=CostSource.Legacy,CreatedByUserId="seed"},new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId,ProductId="p2",CostAmount=8900m,EffectiveFrom=new(2026,1,1),Source=CostSource.Legacy,CreatedByUserId="seed"},new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId,ProductId="p3",CostAmount=9100m,EffectiveFrom=new(2026,1,1),Source=CostSource.Legacy,CreatedByUserId="seed"});
+        db.Orders.AddRange(ToEntity("KSP-10482", new(2026,8,6), "p1", 24990m,2,null,.109m,700m),
+            ToEntity("KSP-10497", new(2026,8,7), "p2",18490m,1,null,.109m,450m),
+            ToEntity("KSP-10511", new(2026,8,8), "p3",42900m,3,4200m,.109m,900m),
+            ToEntity("KSP-10529", new(2026,8,9), "p4",12990m,1,null,.12m,350m),
+            ToEntity("KSP-10543", new(2026,8,10), "p1",37485m,3,null,.109m,800m),
+            ToEntity("KSP-10561", new(2026,8,11), "p2",36980m,2,null,.109m,650m));
         await db.SaveChangesAsync();
         await EnsureNotificationRulesAsync(db);
     }
@@ -476,10 +474,10 @@ public static class DatabaseSeed
     }
 
     private static OrderEntity ToEntity(string id, DateOnly date, string productId, decimal revenue, int quantity,
-        decimal? cost, decimal? actualFee, decimal feeRate, decimal delivery) => new()
+        decimal? actualFee, decimal feeRate, decimal delivery) => new()
         {
             Id=id, ExternalId=id, OrganizationId=DemoTenantId, MarketplaceConnectionId=DemoConnectionId,Status=OrderStatus.Completed, Date=date, CompletionDate=date,
-            Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, UnitCost=cost, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
+            Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
         };
 }
 
@@ -561,6 +559,6 @@ public static class DbAnalytics
         var costs=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==tenant).OrderByDescending(x=>x.EffectiveFrom).ToArrayAsync();
         var actualFees=await db.ActualFees.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.OrderLineId,x=>x.Amount);
         var rules=await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,x.Lines.Select(y=>{products.TryGetValue(y.ProductId,out var product);var rule=rules.Where(r=>r.EffectiveFrom<=calculationDate&&(!r.EffectiveTo.HasValue||r.EffectiveTo>=calculationDate)&&(r.Scope==FeeRuleScope.Default||r.Scope==FeeRuleScope.Product&&r.ProductId==y.ProductId||r.Scope==FeeRuleScope.Category&&r.Category==product?.Category)).OrderByDescending(r=>r.Scope).ThenByDescending(r=>r.EffectiveFrom).FirstOrDefault();decimal? actual=actualFees.TryGetValue(y.Id,out var imported)?imported:y.ActualFee;var rate=y.FeeRate;if(actual is null&&rule is not null){if(rule.ValueType==FeeValueType.Fixed)actual=rule.Value;else rate=rule.Value/100m;}return new OrderLine(y.ProductId,y.Revenue,y.Quantity,costs.FirstOrDefault(c=>c.ProductId==y.ProductId&&c.EffectiveFrom<=calculationDate)?.CostAmount??y.UnitCost,actual,rate,y.Delivery,y.OtherVariableCosts);}).ToArray());}).ToArray();
+        return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,x.Lines.Select(y=>{products.TryGetValue(y.ProductId,out var product);var rule=rules.Where(r=>r.EffectiveFrom<=calculationDate&&(!r.EffectiveTo.HasValue||r.EffectiveTo>=calculationDate)&&(r.Scope==FeeRuleScope.Default||r.Scope==FeeRuleScope.Product&&r.ProductId==y.ProductId||r.Scope==FeeRuleScope.Category&&r.Category==product?.Category)).OrderByDescending(r=>r.Scope).ThenByDescending(r=>r.EffectiveFrom).FirstOrDefault();decimal? actual=actualFees.TryGetValue(y.Id,out var imported)?imported:y.ActualFee;var rate=y.FeeRate;if(actual is null&&rule is not null){if(rule.ValueType==FeeValueType.Fixed)actual=rule.Value;else rate=rule.Value/100m;}return new OrderLine(y.ProductId,y.Revenue,y.Quantity,costs.FirstOrDefault(c=>c.ProductId==y.ProductId&&c.EffectiveFrom<=calculationDate)?.CostAmount,actual,rate,y.Delivery,y.OtherVariableCosts);}).ToArray());}).ToArray();
     }
 }
