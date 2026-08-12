@@ -37,5 +37,5 @@ const deletion = await request('/api/v1/organizations/not-authorized', 401, { me
 if (deletion.response.status !== 401) throw new Error('Destructive endpoint is not protected')
 await request('/api/v1/organizations/not-authorized', 403, { method: 'DELETE', headers: { 'content-type': 'application/json', origin: 'https://attacker.invalid', 'sec-fetch-site': 'cross-site' }, body: JSON.stringify({ organizationName: 'none', password: 'none' }) })
 
-for (const header of ['content-security-policy', 'x-content-type-options', 'referrer-policy']) if (!root.response.headers.get(header)) throw new Error(`Missing security header: ${header}`)
+for (const header of ['content-security-policy', 'x-content-type-options', 'referrer-policy', 'strict-transport-security']) if (!root.response.headers.get(header)) throw new Error(`Missing security header: ${header}`)
 console.log(`Production smoke passed; frontend ${asset}`)

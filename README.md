@@ -44,6 +44,7 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 
 - `DATABASE_URL` — PostgreSQL connection URL;
 - `TOKEN_ENCRYPTION_KEY` — случайный 32-байтовый ключ в Base64. Не менять после сохранения Kaspi token без процедуры re-encryption.
+- `PUBLIC_BASE_URL` — доверенный публичный HTTPS origin без path/query, например `https://seller-finance.example`; используется для CORS/origin-проверки и ссылок в письмах/уведомлениях.
 
 Опциональные:
 

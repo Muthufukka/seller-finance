@@ -2,6 +2,8 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using SellerFinance.Api;
 
 namespace SellerFinance.Tests;
@@ -82,6 +84,15 @@ public sealed class TenantSecurityTests
         var context=new DefaultHttpContext();context.Request.Method="POST";context.Request.Path="/api/v1/telegram/webhook";context.Request.Headers.Origin="https://api.telegram.org";Assert.True(RequestOriginSecurity.IsAllowed(context,new ConfigurationBuilder().Build()));
     }
 
+    [Fact]
+    public void External_Urls_Use_Only_Configured_Origin_And_Require_Https_In_Production()
+    {
+        var production=new TestEnvironment("Production");var valid=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"PUBLIC_BASE_URL","https://seller.example/"}}).Build();var urls=new ExternalUrls(valid,production);Assert.Equal("https://seller.example/?invitationToken=abc",urls.Build("?invitationToken=abc"));
+        var insecure=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"PUBLIC_BASE_URL","http://seller.example"}}).Build();Assert.Throws<InvalidOperationException>(()=>new ExternalUrls(insecure,production));
+        var poisoned=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"PUBLIC_BASE_URL","https://user:pass@attacker.example"}}).Build();Assert.Throws<InvalidOperationException>(()=>new ExternalUrls(poisoned,production));
+        var path=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"PUBLIC_BASE_URL","https://seller.example/app"}}).Build();Assert.Throws<InvalidOperationException>(()=>new ExternalUrls(path,production));
+    }
+
     private static SellerFinanceDbContext CreateDb() => new(new DbContextOptionsBuilder<SellerFinanceDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
@@ -97,4 +108,5 @@ public sealed class TenantSecurityTests
         var claims=new List<Claim>{new(ClaimTypes.NameIdentifier,userId),TenantSecurity.ActiveOrganization(organizationId)};if(email is not null)claims.Add(new(ClaimTypes.Name,email));context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return context;
     }
+    private sealed class TestEnvironment(string name):IHostEnvironment{public string EnvironmentName{get;set;}=name;public string ApplicationName{get;set;}="Tests";public string ContentRootPath{get;set;}=".";public IFileProvider ContentRootFileProvider{get;set;}=new NullFileProvider();}
 }

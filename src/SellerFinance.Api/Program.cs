@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using System.Threading.RateLimiting;
 using System.Text.Json;
 using SellerFinance.Api;
@@ -51,11 +52,18 @@ builder.Services.AddRateLimiter(options=>
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<EmailDelivery>();
+builder.Services.AddSingleton<ExternalUrls>();
+builder.Services.AddHttpsRedirection(options=>{options.RedirectStatusCode=StatusCodes.Status308PermanentRedirect;options.HttpsPort=443;});
+builder.Services.AddHsts(options=>{options.MaxAge=TimeSpan.FromDays(365);options.IncludeSubDomains=true;});
+builder.Services.Configure<ForwardedHeadersOptions>(options=>{options.ForwardedHeaders=ForwardedHeaders.XForwardedFor|ForwardedHeaders.XForwardedProto;options.ForwardLimit=1;options.KnownIPNetworks.Clear();options.KnownProxies.Clear();});
 
 var app = builder.Build();
+_ = app.Services.GetRequiredService<ExternalUrls>().BaseUri;
 await using (var scope = app.Services.CreateAsyncScope())
     await DatabaseSeed.InitializeAsync(scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>());
 
+app.UseForwardedHeaders();
+if(!app.Environment.IsDevelopment()&&!app.Environment.IsEnvironment("Testing")){app.UseHsts();app.UseHttpsRedirection();}
 app.UseExceptionHandler();
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -77,7 +85,7 @@ app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDb
 app.MapPost("/api/v1/telegram/webhook",async(HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{var secret=context.Request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 
 var auth = app.MapGroup("/api/v1/auth");
-auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config) =>
+auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config,ExternalUrls urls) =>
 {
     if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
         return Results.BadRequest(new { title="Укажите название организации" });
@@ -92,13 +100,13 @@ auth.MapPost("/register", async (HttpContext context,RegisterRequest request, Us
     db.NotificationRules.AddRange(new NotificationRuleEntity{Id=Guid.NewGuid(),OrganizationId=organization.Id,EventType=NotificationEventType.SyncRequiresAttention,Enabled=true},new NotificationRuleEntity{Id=Guid.NewGuid(),OrganizationId=organization.Id,EventType=NotificationEventType.MissingCost,Enabled=true},new NotificationRuleEntity{Id=Guid.NewGuid(),OrganizationId=organization.Id,EventType=NotificationEventType.NegativeMargin,Enabled=true,Threshold=0m});
     db.AuditLogs.Add(new() { Id=Guid.NewGuid(), OrganizationId=organization.Id, UserId=user.Id, Action="organization.created", EntityType="Organization", EntityId=organization.Id });
     await db.SaveChangesAsync();
-    if(confirmationRequired){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";if(!await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted))return Results.Problem("Не удалось отправить письмо подтверждения",statusCode:503);return Results.Ok(new{emailConfirmationRequired=true});}
+    if(confirmationRequired){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=urls.Build($"api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}");if(!await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted))return Results.Problem("Не удалось отправить письмо подтверждения",statusCode:503);return Results.Ok(new{emailConfirmationRequired=true});}
     await TenantSecurity.SetActiveOrganizationAsync(users,user,organization.Id);await signIn.SignInAsync(user,isPersistent:true);return Results.Ok(new { organizationId=organization.Id, organizationName=organization.Name, userName=user.DisplayName, role="Owner" });
 }).RequireRateLimiting("auth");
 auth.MapGet("/confirm-email",async(string userId,string token,UserManager<AppUser> users,SellerFinanceDbContext db)=>{var user=await users.FindByIdAsync(userId);if(user is null)return Results.BadRequest("Недействительная ссылка");var result=await users.ConfirmEmailAsync(user,token);if(!result.Succeeded)return Results.BadRequest("Ссылка недействительна или истекла");var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.email.confirmed",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();return Results.Content("Email подтверждён. Вернитесь в Seller Finance.","text/plain; charset=utf-8");}).RequireRateLimiting("auth");
-auth.MapPost("/resend-confirmation",async(HttpContext context,ForgotPasswordRequest request,UserManager<AppUser> users,EmailDelivery email)=>
+auth.MapPost("/resend-confirmation",async(HttpContext context,ForgotPasswordRequest request,UserManager<AppUser> users,EmailDelivery email,ExternalUrls urls)=>
 {
-    var user=await users.FindByEmailAsync(request.Email.Trim());if(user is not null&&!user.EmailConfirmed&&email.IsConfigured){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted);}return Results.Ok(new{message="Если аккаунт ожидает подтверждения, письмо будет отправлено."});
+    var user=await users.FindByEmailAsync(request.Email.Trim());if(user is not null&&!user.EmailConfirmed&&email.IsConfigured){var token=await users.GenerateEmailConfirmationTokenAsync(user);var url=urls.Build($"api/v1/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}");await email.SendAsync(user.Email!,"Подтверждение Seller Finance",EmailDelivery.ConfirmationHtml(url),context.RequestAborted);}return Results.Ok(new{message="Если аккаунт ожидает подтверждения, письмо будет отправлено."});
 }).RequireRateLimiting("auth");
 auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db) =>
 {
@@ -111,10 +119,10 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
     return Results.Ok(new { status="authenticated" });
 }).RequireRateLimiting("auth");
 auth.MapPost("/logout", async (SignInManager<AppUser> signIn) => { await signIn.SignOutAsync(); return Results.NoContent(); }).RequireAuthorization();
-auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email,SellerFinanceDbContext db) =>
+auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email,SellerFinanceDbContext db,ExternalUrls urls) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
-    if (user is not null&&email.IsConfigured){var token=await users.GeneratePasswordResetTokenAsync(user);var url=$"{context.Request.Scheme}://{context.Request.Host}/?resetEmail={Uri.EscapeDataString(user.Email!)}&resetToken={Uri.EscapeDataString(token)}";await email.SendAsync(user.Email!,"Сброс пароля Seller Finance",EmailDelivery.ResetHtml(url),context.RequestAborted);var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.password.reset.requested",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();}
+    if (user is not null&&email.IsConfigured){var token=await users.GeneratePasswordResetTokenAsync(user);var url=urls.Build($"?resetEmail={Uri.EscapeDataString(user.Email!)}&resetToken={Uri.EscapeDataString(token)}");await email.SendAsync(user.Email!,"Сброс пароля Seller Finance",EmailDelivery.ResetHtml(url),context.RequestAborted);var organizationId=await db.OrganizationUsers.Where(x=>x.UserId==user.Id).Select(x=>x.OrganizationId).FirstOrDefaultAsync();db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.password.reset.requested",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync();}
     return Results.Ok(new { message="Если аккаунт существует, инструкция будет отправлена на email." });
 }).RequireRateLimiting("auth");
 auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager<AppUser> users,SellerFinanceDbContext db) =>
@@ -169,7 +177,7 @@ api.MapPut("/organizations/{id}/members/{userId}/role",async(HttpContext ctx,str
 api.MapDelete("/organizations/{id}/members/{userId}",async(HttpContext ctx,string id,string userId,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId);if(membership is null)return Results.NotFound();if(membership.Role==OrganizationRole.Owner)return Results.Conflict(new{title="Владельца нельзя удалить из организации"});db.OrganizationUsers.Remove(membership);AuditWriter.Add(db,ctx,"member.removed","OrganizationUser",userId);await db.SaveChangesAsync();return Results.NoContent();}).RequireRateLimiting("sensitive");
 api.MapGet("/organizations/{id}/invitations",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();return Results.Ok(await db.OrganizationInvitations.AsNoTracking().Where(x=>x.OrganizationId==id&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow).OrderByDescending(x=>x.ExpiresAt).Select(x=>new{x.Id,x.Email,role=x.Role.ToString(),x.ExpiresAt}).ToArrayAsync());});
 api.MapDelete("/organizations/{id}/invitations/{invitationId:guid}",async(HttpContext ctx,string id,Guid invitationId,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();var invitation=await db.OrganizationInvitations.SingleOrDefaultAsync(x=>x.Id==invitationId&&x.OrganizationId==id&&x.AcceptedAt==null);if(invitation is null)return Results.NotFound();db.OrganizationInvitations.Remove(invitation);AuditWriter.Add(db,ctx,"member.invitation.cancelled","OrganizationInvitation",invitationId.ToString());await db.SaveChangesAsync();return Results.NoContent();}).RequireRateLimiting("sensitive");
-api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db,EmailDelivery email) =>
+api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db,EmailDelivery email,ExternalUrls urls) =>
 {
     if (id!=ctx.Tenant()) return Results.NotFound();
     if (!ctx.Membership().CanManageMembers()) return Results.Forbid();
@@ -181,7 +189,7 @@ api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, In
     var token=TokenTools.CreateToken();
     db.OrganizationInvitations.Add(new() { Id=Guid.NewGuid(), OrganizationId=id, Email=normalizedEmail, Role=role, TokenHash=TokenTools.Hash(token), InvitedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!, ExpiresAt=DateTimeOffset.UtcNow.AddDays(7) });
     AuditWriter.Add(db,ctx,"member.invited","OrganizationInvitation",metadataSafe:$"{{\"role\":\"{role}\"}}");
-    await db.SaveChangesAsync();var invitationUrl=$"{ctx.Request.Scheme}://{ctx.Request.Host}/?invitationToken={Uri.EscapeDataString(token)}";var organizationName=await db.Organizations.Where(x=>x.Id==id).Select(x=>x.Name).SingleAsync();var delivered=await email.SendAsync(normalizedEmail,$"Приглашение в {organizationName}",EmailDelivery.InvitationHtml(organizationName,invitationUrl),ctx.RequestAborted);
+    await db.SaveChangesAsync();var invitationUrl=urls.Build($"?invitationToken={Uri.EscapeDataString(token)}");var organizationName=await db.Organizations.Where(x=>x.Id==id).Select(x=>x.Name).SingleAsync();var delivered=await email.SendAsync(normalizedEmail,$"Приглашение в {organizationName}",EmailDelivery.InvitationHtml(organizationName,invitationUrl),ctx.RequestAborted);
     return Results.Ok(new { invitationToken=token, invitationUrl, delivered, expiresInDays=7 });
 }).RequireRateLimiting("sensitive");
 api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationRequest request, SellerFinanceDbContext db,UserManager<AppUser> users,SignInManager<AppUser> signIn) =>

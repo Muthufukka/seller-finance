@@ -6,6 +6,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace SellerFinance.Api;
 
+public sealed class ExternalUrls
+{
+    public Uri BaseUri { get; }
+    public ExternalUrls(IConfiguration configuration,IHostEnvironment environment)
+    {
+        var configured=configuration["PUBLIC_BASE_URL"];
+        if(String.IsNullOrWhiteSpace(configured)&&environment.IsEnvironment("Testing"))configured="http://localhost";
+        if(!Uri.TryCreate(configured,UriKind.Absolute,out var uri)||uri.Scheme is not("https" or "http")||!String.IsNullOrEmpty(uri.UserInfo)||!String.IsNullOrEmpty(uri.Query)||!String.IsNullOrEmpty(uri.Fragment)||uri.AbsolutePath!="/")throw new InvalidOperationException("PUBLIC_BASE_URL must be an absolute HTTPS origin");
+        if(environment.IsProduction()&&!String.Equals(uri.Scheme,Uri.UriSchemeHttps,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("PUBLIC_BASE_URL must use HTTPS in Production");
+        BaseUri=uri;
+    }
+    public string Build(string relativePath)=>new Uri(BaseUri,relativePath.TrimStart('/')).AbsoluteUri;
+}
+
 public static class RequestOriginSecurity
 {
     private static readonly HashSet<string> SafeMethods=["GET","HEAD","OPTIONS","TRACE"];
