@@ -18,4 +18,5 @@ public sealed class EmailDelivery(IConfiguration configuration,ILogger<EmailDeli
     }
     public static string ConfirmationHtml(string url)=>$"<p>Подтвердите email Seller Finance:</p><p><a href=\"{HtmlEncoder.Default.Encode(url)}\">Подтвердить email</a></p><p>Если вы не регистрировались, проигнорируйте письмо.</p>";
     public static string ResetHtml(string url)=>$"<p>Для смены пароля Seller Finance откройте ссылку:</p><p><a href=\"{HtmlEncoder.Default.Encode(url)}\">Сбросить пароль</a></p><p>Если вы не запрашивали сброс, проигнорируйте письмо.</p>";
+    public static string InvitationHtml(string organizationName,string url)=>$"<p>Вас пригласили в организацию <strong>{HtmlEncoder.Default.Encode(organizationName)}</strong> в Seller Finance.</p><p><a href=\"{HtmlEncoder.Default.Encode(url)}\">Принять приглашение</a></p><p>Ссылка действует 7 дней.</p>";
 }

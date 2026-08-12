@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.AspNetCore.Identity;
 using SellerFinance.Api;
 
 namespace SellerFinance.Tests;
@@ -52,6 +53,26 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/database")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/ready")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized,(await client.GetAsync("/api/v1/session")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Owner_Manages_Members_Invitations_And_Role_Boundaries()
+    {
+        using var ownerClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var ownerEmail=$"owner-{Guid.NewGuid():N}@example.test";const string password="PilotTest123";
+        Assert.Equal(HttpStatusCode.OK,(await ownerClient.PostAsJsonAsync("/api/v1/auth/register",new{email=ownerEmail,password,displayName="Owner",organizationName="Members E2E"})).StatusCode);var session=await ownerClient.GetFromJsonAsync<JsonElement>("/api/v1/session");var organizationId=session.GetProperty("organizationId").GetString()!;var ownerId=session.GetProperty("userId").GetString()!;ownerClient.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);
+        var memberEmail=$"viewer-{Guid.NewGuid():N}@example.test";string memberId;
+        await using(var scope=factory.Services.CreateAsyncScope()){var users=scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();var member=new AppUser{UserName=memberEmail,Email=memberEmail,EmailConfirmed=true,DisplayName="Viewer"};Assert.True((await users.CreateAsync(member,password)).Succeeded);memberId=member.Id;var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.OrganizationUsers.Add(new(){OrganizationId=organizationId,UserId=memberId,Role=OrganizationRole.Analyst,JoinedAt=DateTimeOffset.UtcNow});var subscription=await db.Subscriptions.SingleAsync(x=>x.OrganizationId==organizationId);subscription.Plan=SubscriptionPlan.Business;await db.SaveChangesAsync();}
+
+        var members=await ownerClient.GetFromJsonAsync<JsonElement[]>($"/api/v1/organizations/{organizationId}/members");Assert.Equal(2,members!.Length);
+        Assert.Equal(HttpStatusCode.NoContent,(await ownerClient.PutAsJsonAsync($"/api/v1/organizations/{organizationId}/members/{memberId}/role",new{role="Viewer"})).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound,(await ownerClient.PutAsJsonAsync($"/api/v1/organizations/{organizationId}/members/{ownerId}/role",new{role="Admin"})).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,(await ownerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/members/{ownerId}")).StatusCode);
+
+        using var viewerClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});Assert.Equal(HttpStatusCode.OK,(await viewerClient.PostAsJsonAsync("/api/v1/auth/login",new{email=memberEmail,password,rememberMe=false})).StatusCode);viewerClient.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);Assert.Equal(HttpStatusCode.Forbidden,(await viewerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/members/{ownerId}")).StatusCode);
+
+        var invitedEmail=$"invite-{Guid.NewGuid():N}@example.test";var invitation=await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=invitedEmail,role="Analyst"});Assert.Equal(HttpStatusCode.OK,invitation.StatusCode);Assert.Equal(HttpStatusCode.Conflict,(await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=invitedEmail,role="Viewer"})).StatusCode);var pending=await ownerClient.GetFromJsonAsync<JsonElement[]>($"/api/v1/organizations/{organizationId}/invitations");Assert.NotNull(pending);Assert.Single(pending);var invitationId=pending[0].GetProperty("id").GetGuid();Assert.Equal(HttpStatusCode.NoContent,(await ownerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/invitations/{invitationId}")).StatusCode);
+        var acceptingEmail=$"accept-{Guid.NewGuid():N}@example.test";var acceptingInvitation=await (await ownerClient.PostAsJsonAsync($"/api/v1/organizations/{organizationId}/members",new{email=acceptingEmail,role="Analyst"})).Content.ReadFromJsonAsync<JsonElement>();var invitationToken=acceptingInvitation.GetProperty("invitationToken").GetString()!;using var acceptingClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});Assert.Equal(HttpStatusCode.OK,(await acceptingClient.PostAsJsonAsync("/api/v1/auth/register",new{email=acceptingEmail,password,displayName="Accepting",organizationName="Temporary Org"})).StatusCode);var acceptingSession=await acceptingClient.GetFromJsonAsync<JsonElement>("/api/v1/session");acceptingClient.DefaultRequestHeaders.Add("X-Organization-Id",acceptingSession.GetProperty("organizationId").GetString()!);var accepted=await acceptingClient.PostAsJsonAsync("/api/v1/invitations/accept",new{token=invitationToken});Assert.Equal(HttpStatusCode.OK,accepted.StatusCode);acceptingClient.DefaultRequestHeaders.Remove("X-Organization-Id");acceptingClient.DefaultRequestHeaders.Add("X-Organization-Id",organizationId);var targetSession=await acceptingClient.GetFromJsonAsync<JsonElement>("/api/v1/session");Assert.Equal("Analyst",targetSession.GetProperty("role").GetString());
+        Assert.Equal(HttpStatusCode.NoContent,(await ownerClient.DeleteAsync($"/api/v1/organizations/{organizationId}/members/{memberId}")).StatusCode);
     }
 }
 

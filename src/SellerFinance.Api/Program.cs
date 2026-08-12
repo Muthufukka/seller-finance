@@ -45,7 +45,7 @@ if(!useTestDatabase){builder.Services.AddHostedService<KaspiSyncWorker>();builde
 builder.Services.AddRateLimiter(options=>
 {
     options.AddFixedWindowLimiter("auth",o=>{o.PermitLimit=10;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
-    options.AddFixedWindowLimiter("sensitive",o=>{o.PermitLimit=6;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
+    options.AddFixedWindowLimiter("sensitive",o=>{o.PermitLimit=useTestDatabase?100:6;o.Window=TimeSpan.FromMinutes(1);o.QueueLimit=0;});
     options.RejectionStatusCode=429;
 });
 builder.Services.AddOpenApi();
@@ -150,17 +150,23 @@ api.MapPut("/organizations/{id}",async(HttpContext ctx,string id,OrganizationSet
 api.MapDelete("/organizations/{id}",OrganizationEndpoints.DeleteAsync).RequireRateLimiting("sensitive");
 api.MapGet("/organizations/{id}/members",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>id!=ctx.Tenant()?Results.NotFound():Results.Ok(await(from m in db.OrganizationUsers.AsNoTracking() join u in db.Users on m.UserId equals u.Id where m.OrganizationId==id&&m.JoinedAt!=null select new{u.Id,u.Email,u.DisplayName,role=m.Role.ToString(),m.JoinedAt}).ToArrayAsync()));
 api.MapPut("/organizations/{id}/members/{userId}/role",async(HttpContext ctx,string id,string userId,ChangeRoleRequest request,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();if(!Enum.TryParse<OrganizationRole>(request.Role,true,out var role)||role==OrganizationRole.Owner)return Results.BadRequest(new{title="Недопустимая роль"});var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId&&x.Role!=OrganizationRole.Owner);if(membership is null)return Results.NotFound();membership.Role=role;AuditWriter.Add(db,ctx,"member.role.changed","OrganizationUser",userId,$"{{\"role\":\"{role}\"}}");await db.SaveChangesAsync();return Results.NoContent();});
-api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db) =>
+api.MapDelete("/organizations/{id}/members/{userId}",async(HttpContext ctx,string id,string userId,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId);if(membership is null)return Results.NotFound();if(membership.Role==OrganizationRole.Owner)return Results.Conflict(new{title="Владельца нельзя удалить из организации"});db.OrganizationUsers.Remove(membership);AuditWriter.Add(db,ctx,"member.removed","OrganizationUser",userId);await db.SaveChangesAsync();return Results.NoContent();}).RequireRateLimiting("sensitive");
+api.MapGet("/organizations/{id}/invitations",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();return Results.Ok(await db.OrganizationInvitations.AsNoTracking().Where(x=>x.OrganizationId==id&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow).OrderByDescending(x=>x.ExpiresAt).Select(x=>new{x.Id,x.Email,role=x.Role.ToString(),x.ExpiresAt}).ToArrayAsync());});
+api.MapDelete("/organizations/{id}/invitations/{invitationId:guid}",async(HttpContext ctx,string id,Guid invitationId,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();var invitation=await db.OrganizationInvitations.SingleOrDefaultAsync(x=>x.Id==invitationId&&x.OrganizationId==id&&x.AcceptedAt==null);if(invitation is null)return Results.NotFound();db.OrganizationInvitations.Remove(invitation);AuditWriter.Add(db,ctx,"member.invitation.cancelled","OrganizationInvitation",invitationId.ToString());await db.SaveChangesAsync();return Results.NoContent();}).RequireRateLimiting("sensitive");
+api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db,EmailDelivery email) =>
 {
     if (id!=ctx.Tenant()) return Results.NotFound();
     if (!ctx.Membership().CanManageMembers()) return Results.Forbid();
     if (!Enum.TryParse<OrganizationRole>(request.Role,true,out var role) || role==OrganizationRole.Owner) return Results.BadRequest(new { title="Недопустимая роль" });
-    var subscription=await Subscriptions.GetAsync(db,id);var memberLimit=PlanLimits.MaxMembers(subscription.Plan);var members=await db.OrganizationUsers.CountAsync(x=>x.OrganizationId==id&&x.JoinedAt!=null);if(members>=memberLimit)return Results.Problem("Достигнут лимит пользователей тарифа",statusCode:402);
+    var normalizedEmail=request.Email.Trim().ToLowerInvariant();if(String.IsNullOrWhiteSpace(normalizedEmail)||!normalizedEmail.Contains('@'))return Results.BadRequest(new{title="Укажите корректный email"});
+    if(await(from membership in db.OrganizationUsers join user in db.Users on membership.UserId equals user.Id where membership.OrganizationId==id&&membership.JoinedAt!=null&&user.NormalizedEmail==normalizedEmail.ToUpper() select membership).AnyAsync())return Results.Conflict(new{title="Пользователь уже состоит в организации"});
+    if(await db.OrganizationInvitations.AnyAsync(x=>x.OrganizationId==id&&x.Email==normalizedEmail&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow))return Results.Conflict(new{title="Активное приглашение уже существует"});
+    var subscription=await Subscriptions.GetAsync(db,id);var memberLimit=PlanLimits.MaxMembers(subscription.Plan);var members=await db.OrganizationUsers.CountAsync(x=>x.OrganizationId==id&&x.JoinedAt!=null);var pending=await db.OrganizationInvitations.CountAsync(x=>x.OrganizationId==id&&x.AcceptedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow);if(members+pending>=memberLimit)return Results.Problem("Достигнут лимит пользователей тарифа",statusCode:402);
     var token=TokenTools.CreateToken();
-    db.OrganizationInvitations.Add(new() { Id=Guid.NewGuid(), OrganizationId=id, Email=request.Email.Trim().ToLowerInvariant(), Role=role, TokenHash=TokenTools.Hash(token), InvitedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!, ExpiresAt=DateTimeOffset.UtcNow.AddDays(7) });
+    db.OrganizationInvitations.Add(new() { Id=Guid.NewGuid(), OrganizationId=id, Email=normalizedEmail, Role=role, TokenHash=TokenTools.Hash(token), InvitedByUserId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!, ExpiresAt=DateTimeOffset.UtcNow.AddDays(7) });
     AuditWriter.Add(db,ctx,"member.invited","OrganizationInvitation",metadataSafe:$"{{\"role\":\"{role}\"}}");
-    await db.SaveChangesAsync();
-    return Results.Ok(new { invitationToken=token, expiresInDays=7 });
+    await db.SaveChangesAsync();var invitationUrl=$"{ctx.Request.Scheme}://{ctx.Request.Host}/?invitationToken={Uri.EscapeDataString(token)}";var organizationName=await db.Organizations.Where(x=>x.Id==id).Select(x=>x.Name).SingleAsync();var delivered=await email.SendAsync(normalizedEmail,$"Приглашение в {organizationName}",EmailDelivery.InvitationHtml(organizationName,invitationUrl),ctx.RequestAborted);
+    return Results.Ok(new { invitationToken=token, invitationUrl, delivered, expiresInDays=7 });
 }).RequireRateLimiting("sensitive");
 api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationRequest request, SellerFinanceDbContext db) =>
 {
@@ -173,9 +179,9 @@ api.MapPost("/invitations/accept", async (HttpContext ctx, AcceptInvitationReque
     if (membership is null) db.OrganizationUsers.Add(new() { OrganizationId=invitation.OrganizationId, UserId=userId, Role=invitation.Role, InvitedAt=DateTimeOffset.UtcNow, JoinedAt=DateTimeOffset.UtcNow });
     else { membership.Role=invitation.Role; membership.JoinedAt=DateTimeOffset.UtcNow; }
     invitation.AcceptedAt=DateTimeOffset.UtcNow;
-    AuditWriter.Add(db,ctx,"member.invitation.accepted","OrganizationInvitation",invitation.Id.ToString());
+    db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=invitation.OrganizationId,UserId=userId,Action="member.invitation.accepted",EntityType="OrganizationInvitation",EntityId=invitation.Id.ToString()});
     await db.SaveChangesAsync();
-    return Results.NoContent();
+    return Results.Ok(new{organizationId=invitation.OrganizationId});
 });
 api.MapGet("/analytics/summary", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,bool completeCostsOnly=false) => Results.Ok(await DbAnalytics.SummaryAsync(db,c.Tenant(),dateFrom,dateTo,completeCostsOnly)));
 api.MapGet("/analytics/timeseries", async (HttpContext c, SellerFinanceDbContext db,DateOnly? dateFrom,DateOnly? dateTo,bool completeCostsOnly=false) => Results.Ok(await DbAnalytics.TimeSeriesAsync(db,c.Tenant(),dateFrom,dateTo,completeCostsOnly)));

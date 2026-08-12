@@ -157,6 +157,24 @@ function App() {
       .finally(() => setAuthReady(true));
   }, []);
   useEffect(() => {
+    const invitationToken = new URLSearchParams(location.search).get("invitationToken");
+    if (!session || !invitationToken) return;
+    const currentHeaders = { "X-Organization-Id": session.organizationId, "Content-Type": "application/json" };
+    fetch("/api/v1/invitations/accept", { method: "POST", headers: currentHeaders, body: JSON.stringify({ token: invitationToken }) })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("invitation");
+        const accepted = await response.json();
+        return fetch("/api/v1/session", { headers: { "X-Organization-Id": accepted.organizationId } });
+      })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("session");
+        setSession(await response.json());
+        history.replaceState({}, "", location.pathname);
+        setPage("settings");
+      })
+      .catch(() => {});
+  }, [session?.userId]);
+  useEffect(() => {
     if (!session) return;
     const headers = { "X-Organization-Id": session.organizationId };
     const range = periodRange(period, customFrom, customTo);
@@ -1468,15 +1486,34 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
   const [telegram, setTelegram] = useState<any>(null),
     [link, setLink] = useState<any>(null),
     [message, setMessage] = useState(""),
+    [members, setMembers] = useState<any[]>([]),
+    [invitations, setInvitations] = useState<any[]>([]),
+    [invitationLink, setInvitationLink] = useState(""),
     [deleting, setDeleting] = useState(false);
   const headers = { "X-Organization-Id": session.organizationId };
   const load = () =>
     fetch("/api/v1/telegram", { headers })
       .then((r) => r.json())
       .then(setTelegram);
+  const loadMembers = async () => {
+    const memberResponse = await fetch(`/api/v1/organizations/${session.organizationId}/members`, { headers });
+    if (memberResponse.ok) setMembers(await memberResponse.json());
+    if (session.role === "Owner" || session.role === "Admin") {
+      const invitationResponse = await fetch(`/api/v1/organizations/${session.organizationId}/invitations`, { headers });
+      if (invitationResponse.ok) setInvitations(await invitationResponse.json());
+    }
+  };
   useEffect(() => {
     load();
+    loadMembers();
   }, []);
+  const inviteMember = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);const response=await fetch(`/api/v1/organizations/${session.organizationId}/members`,{method:"POST",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({email:form.get("email"),role:form.get("role")})});const data=await response.json().catch(()=>null);
+    if(response.ok){setMessage(data.delivered?"Приглашение отправлено по email":"Приглашение создано — передайте ссылку пользователю");setInvitationLink(data.invitationUrl);formElement.reset();loadMembers();}else setMessage(data?.title||data?.detail||"Не удалось создать приглашение");
+  };
+  const changeMemberRole = async (userId:string,role:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}/role`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({role})});setMessage(response.ok?"Роль изменена":"Не удалось изменить роль");if(response.ok)loadMembers();};
+  const removeMember = async (userId:string) => {if(!window.confirm("Удалить пользователя из организации?"))return;const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}`,{method:"DELETE",headers});setMessage(response.ok?"Участник удалён":"Не удалось удалить участника");if(response.ok)loadMembers();};
+  const cancelInvitation = async (id:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/invitations/${id}`,{method:"DELETE",headers});setMessage(response.ok?"Приглашение отменено":"Не удалось отменить приглашение");if(response.ok)loadMembers();};
   const startLink = async () => {
     const r = await fetch("/api/v1/telegram/link", { method: "POST", headers });
     const data = await r.json();
@@ -1626,6 +1663,13 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
           ))}
         </article>
       </div>
+      <article className="entry-card members-card">
+        <h2>Пользователи и роли</h2>
+        <div className="member-list">
+          {members.map((member:any)=><div className="member-row" key={member.id}><div><b>{member.displayName||member.email}</b><small>{member.email}</small></div><select value={member.role} disabled={!canManage||member.role==="Owner"} onChange={event=>changeMemberRole(member.id,event.target.value)}><option value="Owner">Owner</option><option value="Admin">Admin</option><option value="Analyst">Analyst</option><option value="Viewer">Viewer</option></select>{canManage&&member.role!=="Owner"&&<button className="text-danger" onClick={()=>removeMember(member.id)}>Удалить</button>}</div>)}
+        </div>
+        {canManage&&<><form className="member-invite-form" onSubmit={inviteMember}><input name="email" type="email" placeholder="user@example.com" required/><select name="role" defaultValue="Analyst"><option value="Admin">Admin</option><option value="Analyst">Analyst</option><option value="Viewer">Viewer</option></select><button className="primary">Пригласить</button></form>{invitationLink&&<label className="invitation-link">Ссылка приглашения<input readOnly value={invitationLink} onFocus={event=>event.currentTarget.select()}/></label>}{invitations.map((invitation:any)=><div className="pending-invitation" key={invitation.id}><span>{invitation.email} · {invitation.role} · до {new Date(invitation.expiresAt).toLocaleDateString("ru-RU")}</span><button className="text-danger" onClick={()=>cancelInvitation(invitation.id)}>Отменить</button></div>)}</>}
+      </article>
       {session.role === "Owner" && (
         <article className="entry-card danger-zone">
           <h2>Удаление организации</h2>
