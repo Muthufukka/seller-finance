@@ -15,7 +15,7 @@ public static class TenantSecurity
         var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (String.IsNullOrWhiteSpace(userId)) return null;
         var requested = context.Request.Headers["X-Organization-Id"].ToString();
-        var query = db.OrganizationUsers.AsNoTracking().Where(x => x.UserId == userId && x.JoinedAt != null);
+        var query = from memberRow in db.OrganizationUsers.AsNoTracking() join organization in db.Organizations.AsNoTracking() on memberRow.OrganizationId equals organization.Id where memberRow.UserId==userId&&memberRow.JoinedAt!=null&&organization.Status=="Active" select memberRow;
         var membership = String.IsNullOrWhiteSpace(requested)
             ? await query.OrderBy(x => x.JoinedAt).FirstOrDefaultAsync()
             : await query.SingleOrDefaultAsync(x => x.OrganizationId == requested);
@@ -36,6 +36,7 @@ public static class AuditWriter
             Id = Guid.NewGuid(), OrganizationId = context.Items.TryGetValue("membership", out var value) ? ((TenantMembership)value!).OrganizationId : null,
             UserId = context.User.FindFirstValue(ClaimTypes.NameIdentifier), Action = action, EntityType = entityType, EntityId = entityId, MetadataSafe = metadataSafe
         });
+    public static void AddSystem(SellerFinanceDbContext db,HttpContext context,string organizationId,string action,string entityType,string? entityId=null,string metadataSafe="{}")=>db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=context.User.FindFirstValue(ClaimTypes.NameIdentifier),Action=action,EntityType=entityType,EntityId=entityId,MetadataSafe=metadataSafe});
 }
 
 public static class TokenTools
@@ -47,4 +48,16 @@ public static class TokenTools
 public static class SaasSecurity
 {
     public static bool IsAdmin(ClaimsPrincipal user,IConfiguration configuration)=>!String.IsNullOrWhiteSpace(configuration["SAAS_ADMIN_EMAIL"])&&String.Equals(user.Identity?.Name,configuration["SAAS_ADMIN_EMAIL"],StringComparison.OrdinalIgnoreCase);
+}
+
+public static class FeatureFlags
+{
+    public static readonly string[] Known=["KaspiSync","TelegramNotifications","AdvancedExports"];
+    public static bool IsKnown(string key)=>Known.Contains(key,StringComparer.OrdinalIgnoreCase);
+    public static async Task<bool> IsEnabledAsync(SellerFinanceDbContext db,string organizationId,string key,CancellationToken ct=default)=>(await db.OrganizationFeatureFlags.AsNoTracking().Where(x=>x.OrganizationId==organizationId&&x.Key==key).Select(x=>(bool?)x.Enabled).SingleOrDefaultAsync(ct))??true;
+}
+
+public static class PlanLimits
+{
+    public static int MaxMembers(SubscriptionPlan plan)=>plan switch{SubscriptionPlan.Trial=>2,SubscriptionPlan.Start=>3,SubscriptionPlan.Pro=>10,SubscriptionPlan.Business=>30,_=>2};
 }

@@ -28,6 +28,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<TelegramConnectionEntity> TelegramConnections => Set<TelegramConnectionEntity>();
     public DbSet<NotificationRuleEntity> NotificationRules => Set<NotificationRuleEntity>();
     public DbSet<NotificationDeliveryEntity> NotificationDeliveries => Set<NotificationDeliveryEntity>();
+    public DbSet<OrganizationFeatureFlagEntity> OrganizationFeatureFlags => Set<OrganizationFeatureFlagEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -85,6 +86,8 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<NotificationDeliveryEntity>().Property(x=>x.Value).HasPrecision(19,4);
         modelBuilder.Entity<NotificationDeliveryEntity>().HasIndex(x=>new{x.OrganizationId,x.DeduplicationKey}).IsUnique();
         modelBuilder.Entity<NotificationDeliveryEntity>().HasIndex(x=>new{x.Status,x.NextAttemptAt});
+        modelBuilder.Entity<OrganizationFeatureFlagEntity>().HasKey(x=>x.Id);
+        modelBuilder.Entity<OrganizationFeatureFlagEntity>().HasIndex(x=>new{x.OrganizationId,x.Key}).IsUnique();
     }
 }
 
@@ -150,6 +153,16 @@ public sealed class NotificationDeliveryEntity
     public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? SentAt { get; set; }
     public string? ErrorCode { get; set; }
+}
+
+public sealed class OrganizationFeatureFlagEntity
+{
+    public Guid Id { get; set; }
+    public string OrganizationId { get; set; } = "";
+    public string Key { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string UpdatedByUserId { get; set; } = "";
 }
 
 public enum FeeRuleScope { Default, Category, Product }

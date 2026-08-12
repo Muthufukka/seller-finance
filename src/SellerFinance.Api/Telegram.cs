@@ -21,6 +21,7 @@ public sealed class NotificationDispatcher(IServiceScopeFactory scopes)
     public async Task<bool> QueueAsync(string organizationId,NotificationEventType eventType,string text,decimal? value,string deduplicationKey,CancellationToken ct)
     {
         await using var scope=scopes.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();
+        if(!await FeatureFlags.IsEnabledAsync(db,organizationId,"TelegramNotifications",ct))return false;
         if(!await db.TelegramConnections.AsNoTracking().AnyAsync(x=>x.OrganizationId==organizationId&&x.Status=="Active"&&x.ChatId!=null,ct))return false;
         var rule=await db.NotificationRules.AsNoTracking().SingleOrDefaultAsync(x=>x.OrganizationId==organizationId&&x.EventType==eventType&&x.Enabled,ct);if(rule is null||!MatchesThreshold(eventType,value,rule.Threshold))return false;
         if(await db.NotificationDeliveries.AnyAsync(x=>x.OrganizationId==organizationId&&x.DeduplicationKey==deduplicationKey,ct))return false;

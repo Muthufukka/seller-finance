@@ -12,6 +12,13 @@ namespace SellerFinance.Tests;
 
 public sealed class SaasFeaturesTests
 {
+    [Theory]
+    [InlineData(SubscriptionPlan.Trial,2)]
+    [InlineData(SubscriptionPlan.Start,3)]
+    [InlineData(SubscriptionPlan.Pro,10)]
+    [InlineData(SubscriptionPlan.Business,30)]
+    public void Member_Limits_Match_Tariff(SubscriptionPlan plan,int expected)=>Assert.Equal(expected,PlanLimits.MaxMembers(plan));
+
     [Fact]
     public async Task ExportBuilder_Creates_Utf8_Csv_Without_Missing_Cost_As_Zero()
     {
@@ -78,6 +85,21 @@ public sealed class SaasFeaturesTests
         var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationDeliveries.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,DeduplicationKey="retry",Message="Safe message"});await db.SaveChangesAsync();}
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var worker=new NotificationDeliveryWorker(provider.GetRequiredService<IServiceScopeFactory>(),new TelegramClient(new HttpClient(new StatusHandler(HttpStatusCode.InternalServerError)),config),NullLogger<NotificationDeliveryWorker>.Instance);await worker.ProcessOneAsync(CancellationToken.None);
         await using var verify=provider.CreateAsyncScope();var delivery=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().NotificationDeliveries.SingleAsync();Assert.Equal(NotificationDeliveryStatus.RetryScheduled,delivery.Status);Assert.Equal("TELEGRAM_REJECTED",delivery.ErrorCode);Assert.True(delivery.NextAttemptAt>DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Saas_Admin_Retry_Creates_New_Safe_Job_Only_For_Attention_State()
+    {
+        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow.AddDays(-1)});await db.SaveChangesAsync();
+        var result=await SaasAdminOperations.RetrySyncAsync(db,source);
+        Assert.Equal(SyncRetryFailure.None,result.Failure);Assert.NotNull(result.Job);Assert.NotEqual(source,result.Job!.Id);Assert.Equal(SyncJobStatus.Queued,result.Job.Status);Assert.Equal(connection,result.Job.MarketplaceConnectionId);
+    }
+
+    [Fact]
+    public async Task Saas_Admin_Retry_Is_Blocked_By_Disabled_Feature()
+    {
+        await using var db=CreateDb();var connection=Guid.NewGuid();var source=Guid.NewGuid();db.Organizations.Add(new(){Id="org",Name="Org",Status="Active"});db.OrganizationFeatureFlags.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Key="KaspiSync",Enabled=false,UpdatedByUserId="admin"});db.MarketplaceConnections.Add(new(){Id=connection,OrganizationId="org",Provider="Kaspi",TokenCiphertext=[1],TokenNonce=[1],TokenTag=[1]});db.SyncJobs.Add(new(){Id=source,OrganizationId="org",MarketplaceConnectionId=connection,Status=SyncJobStatus.RequiresAttention,WindowFrom=DateTimeOffset.UtcNow.AddDays(-14),WindowTo=DateTimeOffset.UtcNow});await db.SaveChangesAsync();
+        Assert.Equal(SyncRetryFailure.OrganizationDisabled,(await SaasAdminOperations.RetrySyncAsync(db,source)).Failure);
     }
 
     private static ExportJobEntity Job(string format,string report)=>new(){Id=Guid.NewGuid(),OrganizationId="org",CreatedByUserId="user",Format=format,ReportType=report,DownloadTokenHash="hash"};
