@@ -134,13 +134,21 @@ api.MapGet("/session", async (HttpContext ctx, SellerFinanceDbContext db) =>
 {
     var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==ctx.Tenant());
     var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==ctx.User.FindFirstValue(ClaimTypes.NameIdentifier));
-    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
+    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name,organization.TimeZone,organization.Currency, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
 });
 api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext db) =>
 {
     var userId=user.FindFirstValue(ClaimTypes.NameIdentifier)!;
     return Results.Ok(await (from m in db.OrganizationUsers.AsNoTracking() join o in db.Organizations on m.OrganizationId equals o.Id where m.UserId==userId&&m.JoinedAt!=null select new { o.Id,o.Name,role=m.Role.ToString() }).ToArrayAsync());
 });
+api.MapPut("/organizations/{id}",async(HttpContext ctx,string id,OrganizationSettingsRequest request,SellerFinanceDbContext db,CancellationToken ct)=>
+{
+    var result=await OrganizationSettings.UpdateAsync(db,id,ctx.Membership(),request.Name,request.TimeZone,request.Currency,ct);
+    if(result.Failure==OrganizationSettingsFailure.NotFound)return Results.NotFound();
+    if(result.Failure==OrganizationSettingsFailure.Forbidden)return Results.Forbid();
+    if(result.Failure!=OrganizationSettingsFailure.None)return Results.BadRequest(new{title=result.Failure switch{OrganizationSettingsFailure.InvalidName=>"Название должно содержать от 2 до 120 символов",OrganizationSettingsFailure.InvalidTimeZone=>"Неизвестный часовой пояс IANA",_=>"В MVP поддерживается валюта KZT"}});
+    AuditWriter.Add(db,ctx,"organization.settings.changed","Organization",id,JsonSerializer.Serialize(new{result.Organization!.Name,result.Organization.TimeZone,result.Organization.Currency}));await db.SaveChangesAsync(ct);return Results.Ok(new{result.Organization.Name,result.Organization.TimeZone,result.Organization.Currency});
+}).RequireRateLimiting("sensitive");
 api.MapGet("/organizations/{id}/members",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>id!=ctx.Tenant()?Results.NotFound():Results.Ok(await(from m in db.OrganizationUsers.AsNoTracking() join u in db.Users on m.UserId equals u.Id where m.OrganizationId==id&&m.JoinedAt!=null select new{u.Id,u.Email,u.DisplayName,role=m.Role.ToString(),m.JoinedAt}).ToArrayAsync()));
 api.MapPut("/organizations/{id}/members/{userId}/role",async(HttpContext ctx,string id,string userId,ChangeRoleRequest request,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();if(!Enum.TryParse<OrganizationRole>(request.Role,true,out var role)||role==OrganizationRole.Owner)return Results.BadRequest(new{title="Недопустимая роль"});var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId&&x.Role!=OrganizationRole.Owner);if(membership is null)return Results.NotFound();membership.Role=role;AuditWriter.Add(db,ctx,"member.role.changed","OrganizationUser",userId,$"{{\"role\":\"{role}\"}}");await db.SaveChangesAsync();return Results.NoContent();});
 api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db) =>
@@ -292,6 +300,7 @@ record LoginRequest(string Email,string Password,bool RememberMe=true);
 record ForgotPasswordRequest(string Email);
 record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);
+record OrganizationSettingsRequest(string Name,string TimeZone,string Currency);
 record AcceptInvitationRequest(string Token);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 record KaspiConnectionRequest(string Token,string? DisplayName=null);
