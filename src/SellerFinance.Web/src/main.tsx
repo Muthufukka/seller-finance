@@ -240,7 +240,7 @@ function App() {
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} />}
         {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "integrations" && <KaspiConnections session={session} />}
-        {page === "expenses" && <Expenses session={session} products={products} />}
+        {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
         {page === "fees" && <Fees session={session} products={products} />}
         {page === "exports" && <Exports session={session} />}
         {page === "settings" && <SettingsPage session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
@@ -1200,7 +1200,7 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
   );
 }
 
-function Expenses({ session, products }: { session: Session; products: Product[] }) {
+function Expenses({ session, products, orders }: { session: Session; products: Product[]; orders: Order[] }) {
   const [rows, setRows] = useState<any[]>([]),
     [message, setMessage] = useState("");
   const headers = { "X-Organization-Id": session.organizationId };
@@ -1223,6 +1223,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
         date: f.get("date"),
         periodEnd: f.get("periodEnd") || null,
         productId: f.get("productId") || null,
+        orderId: f.get("orderId") || null,
         comment: f.get("comment"),
       }),
     });
@@ -1265,6 +1266,10 @@ function Expenses({ session, products }: { session: Session; products: Product[]
               </option>
             ))}
           </select>
+          <select name="orderId" aria-label="Заказ">
+            <option value="">Без привязки к заказу</option>
+            {orders.map((order)=><option value={order.id} key={order.id}>Заказ {order.externalId||order.id}</option>)}
+          </select>
           <input name="comment" placeholder="Комментарий" />
           <button className="primary">Добавить</button>
         </form>
@@ -1290,7 +1295,7 @@ function Expenses({ session, products }: { session: Session; products: Product[]
                   <td>{new Date(r.date).toLocaleDateString("ru-RU")}{r.periodEnd&&r.periodEnd!==r.date?` — ${new Date(r.periodEnd).toLocaleDateString("ru-RU")}`:""}</td>
                   <td>{r.type}</td>
                   <td>{money(r.amount)}</td>
-                  <td>{r.productId ? products.find((p) => p.id === r.productId)?.sku : "Организация"}</td>
+                  <td>{r.orderId?`Заказ ${orders.find((order)=>order.id===r.orderId)?.externalId||r.orderId}`:r.productId ? products.find((p) => p.id === r.productId)?.sku : "Организация"}</td>
                   <td>{r.comment || "—"}</td>
                   <td>
                     <button className="text-danger" onClick={() => remove(r.id)}>

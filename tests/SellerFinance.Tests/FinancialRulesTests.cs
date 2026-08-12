@@ -60,6 +60,19 @@ public sealed class FinancialRulesTests
         var expense=new ExpenseEntity{Amount=100,Date=new(2026,8,1),PeriodEnd=new(2026,8,3)};var days=ExpenseRecognition.ByDay([expense]);Assert.Equal(100,days.Values.Sum());Assert.Equal(3,days.Count);Assert.Equal(ExpenseRecognition.Amount(expense,new(2026,8,2),new(2026,8,3)),days[new(2026,8,2)]+days[new(2026,8,3)]);
     }
 
+    [Fact]
+    public async Task Order_Linked_Expense_Is_A_Variable_Cost_And_Is_Not_Deducted_Twice()
+    {
+        await using var db=CreateDb();db.Products.AddRange(new(){Id="p1",OrganizationId="org",Sku="A",Name="A"},new(){Id="p2",OrganizationId="org",Sku="B",Name="B"});db.ProductCostHistory.AddRange(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=100,EffectiveFrom=new(2020,1,1),CreatedByUserId="user"},new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p2",CostAmount=100,EffectiveFrom=new(2020,1,1),CreatedByUserId="user"});db.Orders.Add(new(){Id="o",ExternalId="o",OrganizationId="org",Status=OrderStatus.Completed,Date=new(2026,8,2),CompletionDate=new(2026,8,2),Lines=[new(){Id=Guid.NewGuid(),OrderId="o",ProductId="p1",Revenue=1000,Quantity=1},new(){Id=Guid.NewGuid(),OrderId="o",ProductId="p2",Revenue=2000,Quantity=1}]});db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",OrderId="o",Type=ExpenseType.Fulfillment,Amount=999,Date=new(2026,8,2),CreatedByUserId="user"});await db.SaveChangesAsync();
+        var summary=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org"));Assert.Equal(0,summary.GetProperty("OperatingExpenses").GetDecimal());Assert.Equal(1801,summary.GetProperty("OperatingProfit").GetDecimal());var detail=JsonSerializer.SerializeToElement(await DbAnalytics.OrderDetailAsync(db,"org","o"));Assert.Equal(999,detail.GetProperty("VariableCosts").GetDecimal());Assert.Equal(999,detail.GetProperty("lines").EnumerateArray().Sum(x=>x.GetProperty("OtherVariableCosts").GetDecimal()));Assert.Equal(333,detail.GetProperty("lines")[0].GetProperty("OtherVariableCosts").GetDecimal());Assert.Equal(666,detail.GetProperty("lines")[1].GetProperty("OtherVariableCosts").GetDecimal());
+    }
+
+    [Fact]
+    public async Task Expense_Linked_To_Noncompleted_Order_Remains_An_Operating_Expense()
+    {
+        await using var db=CreateDb();db.Orders.Add(new(){Id="cancelled",ExternalId="cancelled",OrganizationId="org",Status=OrderStatus.Cancelled,Date=new(2026,8,2)});db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",OrderId="cancelled",Type=ExpenseType.Fulfillment,Amount=500,Date=new(2026,8,2),CreatedByUserId="user"});await db.SaveChangesAsync();var summary=JsonSerializer.SerializeToElement(await DbAnalytics.SummaryAsync(db,"org"));Assert.Equal(500,summary.GetProperty("OperatingExpenses").GetDecimal());Assert.Equal(-500,summary.GetProperty("OperatingProfit").GetDecimal());
+    }
+
     private static OrderLineEntity SeedOrder(SellerFinanceDbContext db)
     {
         db.Products.Add(new(){Id="p1",OrganizationId="org",Sku="SKU",Name="Product"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=0.01m,EffectiveFrom=new(2020,1,1),Source=CostSource.Manual,CreatedByUserId="user"});
