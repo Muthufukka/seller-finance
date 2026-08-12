@@ -11,6 +11,11 @@ using System.Text;
 
 namespace SellerFinance.Api;
 
+public static class DatabaseConflicts
+{
+    public static bool IsActiveSyncJob(DbUpdateException exception)=>exception.InnerException is PostgresException{SqlState:PostgresErrorCodes.UniqueViolation,ConstraintName:"IX_SyncJobs_MarketplaceConnectionId"};
+}
+
 public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbContext> options) : IdentityDbContext<AppUser>(options)
 {
     public DbSet<OrganizationEntity> Organizations => Set<OrganizationEntity>();
@@ -91,6 +96,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<MarketplaceConnectionEntity>().HasOne<OrganizationEntity>().WithMany().HasForeignKey(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<SyncJobEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<SyncJobEntity>().HasIndex(x => new { x.Status, x.NextAttemptAt });
+        modelBuilder.Entity<SyncJobEntity>().HasIndex(x=>x.MarketplaceConnectionId).IsUnique().HasFilter("\"Status\" IN (0, 1, 3)");
         modelBuilder.Entity<SyncJobEntity>().HasOne<MarketplaceConnectionEntity>().WithMany().HasForeignKey(x=>x.MarketplaceConnectionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<ProductCostHistoryEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ProductCostHistoryEntity>().Property(x => x.CostAmount).HasPrecision(19,4);
@@ -170,6 +176,7 @@ public sealed class ExportJobEntity
     public string? FileName { get; set; }
     public string DownloadTokenHash { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
     public DateTimeOffset? CompletedAt { get; set; }
     public string? ErrorCode { get; set; }
@@ -208,6 +215,7 @@ public sealed class NotificationDeliveryEntity
     public NotificationDeliveryStatus Status { get; set; } = NotificationDeliveryStatus.Queued;
     public int Attempt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? SentAt { get; set; }
     public string? ErrorCode { get; set; }

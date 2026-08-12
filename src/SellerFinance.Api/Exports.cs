@@ -52,6 +52,7 @@ public sealed class ExportBuilder(SellerFinanceDbContext db)
 
 public sealed class ExportWorker(IServiceScopeFactory scopes,ILogger<ExportWorker> logger):BackgroundService
 {
+    private static readonly SemaphoreSlim NonRelationalClaimLock=new(1,1);
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while(!stoppingToken.IsCancellationRequested){try{await ProcessOneAsync(stoppingToken);}catch(Exception ex){logger.LogError(ex,"Export worker iteration failed");}await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken);}
@@ -61,8 +62,15 @@ public sealed class ExportWorker(IServiceScopeFactory scopes,ILogger<ExportWorke
         await using var scope=scopes.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();
         if(db.Database.IsRelational())await db.ExportJobs.Where(x=>x.ExpiresAt<DateTimeOffset.UtcNow&&x.FileContent!=null).ExecuteUpdateAsync(x=>x.SetProperty(y=>y.FileContent,(byte[]?)null).SetProperty(y=>y.Status,ExportJobStatus.Expired),ct);
         else{var expired=await db.ExportJobs.Where(x=>x.ExpiresAt<DateTimeOffset.UtcNow&&x.FileContent!=null).ToArrayAsync(ct);foreach(var item in expired){item.FileContent=null;item.Status=ExportJobStatus.Expired;}if(expired.Length>0)await db.SaveChangesAsync(ct);}
-        var job=await db.ExportJobs.OrderBy(x=>x.CreatedAt).FirstOrDefaultAsync(x=>x.Status==ExportJobStatus.Queued,ct);if(job is null)return;job.Status=ExportJobStatus.Running;await db.SaveChangesAsync(ct);
+        var job=await ClaimAsync(db,ct);if(job is null)return;
         try{var artifact=await scope.ServiceProvider.GetRequiredService<ExportBuilder>().BuildAsync(job,ct);job.FileContent=artifact.Content;job.ContentType=artifact.ContentType;job.FileName=artifact.FileName;job.RowCount=artifact.RowCount;job.Status=ExportJobStatus.Succeeded;job.CompletedAt=DateTimeOffset.UtcNow;}
         catch(Exception ex){logger.LogWarning("Export {ExportId} failed with {ErrorType}",job.Id,ex.GetType().Name);job.Status=ExportJobStatus.Failed;job.ErrorCode="EXPORT_FAILED";job.CompletedAt=DateTimeOffset.UtcNow;}await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task<ExportJobEntity?> ClaimAsync(SellerFinanceDbContext db,CancellationToken ct)
+    {
+        var now=DateTimeOffset.UtcNow;var staleBefore=now.AddMinutes(-30);
+        if(db.Database.IsRelational()){var id=await db.ExportJobs.Where(x=>x.Status==ExportJobStatus.Queued||x.Status==ExportJobStatus.Running&&(!x.StartedAt.HasValue||x.StartedAt<staleBefore)).OrderBy(x=>x.CreatedAt).Select(x=>(Guid?)x.Id).FirstOrDefaultAsync(ct);if(!id.HasValue)return null;var affected=await db.ExportJobs.Where(x=>x.Id==id&&(x.Status==ExportJobStatus.Queued||x.Status==ExportJobStatus.Running&&(!x.StartedAt.HasValue||x.StartedAt<staleBefore))).ExecuteUpdateAsync(x=>x.SetProperty(y=>y.Status,ExportJobStatus.Running).SetProperty(y=>y.StartedAt,now),ct);return affected==1?await db.ExportJobs.SingleAsync(x=>x.Id==id,ct):null;}
+        await NonRelationalClaimLock.WaitAsync(ct);try{var job=await db.ExportJobs.OrderBy(x=>x.CreatedAt).FirstOrDefaultAsync(x=>x.Status==ExportJobStatus.Queued||x.Status==ExportJobStatus.Running&&(!x.StartedAt.HasValue||x.StartedAt<staleBefore),ct);if(job is null)return null;job.Status=ExportJobStatus.Running;job.StartedAt=now;await db.SaveChangesAsync(ct);return job;}finally{NonRelationalClaimLock.Release();}
     }
 }

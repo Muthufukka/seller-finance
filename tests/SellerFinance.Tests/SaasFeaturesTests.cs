@@ -50,6 +50,27 @@ public sealed class SaasFeaturesTests
     }
 
     [Fact]
+    public async Task Concurrent_Export_Workers_Claim_Different_Jobs()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));services.AddScoped<ExportBuilder>();await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.ExportJobs.AddRange(Job("csv","Products"),Job("csv","Products"));await db.SaveChangesAsync();}
+        var scopes=provider.GetRequiredService<IServiceScopeFactory>();var first=new ExportWorker(scopes,NullLogger<ExportWorker>.Instance);var second=new ExportWorker(scopes,NullLogger<ExportWorker>.Instance);await Task.WhenAll(first.ProcessOneAsync(CancellationToken.None),second.ProcessOneAsync(CancellationToken.None));
+        await using var verify=provider.CreateAsyncScope();var jobs=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().ExportJobs.ToArrayAsync();Assert.Equal(2,jobs.Length);Assert.All(jobs,x=>Assert.Equal(ExportJobStatus.Succeeded,x.Status));
+    }
+
+    [Fact]
+    public void Active_Sync_Job_Index_Is_Unique_And_Filtered()
+    {
+        using var db=CreateDb();var index=db.Model.FindEntityType(typeof(SyncJobEntity))!.GetIndexes().Single(x=>x.Properties.Select(p=>p.Name).SequenceEqual([nameof(SyncJobEntity.MarketplaceConnectionId)]));Assert.True(index.IsUnique);Assert.Equal("\"Status\" IN (0, 1, 3)",index.GetFilter());
+    }
+
+    [Fact]
+    public async Task Export_Worker_Reclaims_Stale_Running_Job()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));services.AddScoped<ExportBuilder>();await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var job=Job("csv","Products");job.Status=ExportJobStatus.Running;job.StartedAt=DateTimeOffset.UtcNow.AddHours(-1);db.ExportJobs.Add(job);await db.SaveChangesAsync();}
+        await new ExportWorker(provider.GetRequiredService<IServiceScopeFactory>(),NullLogger<ExportWorker>.Instance).ProcessOneAsync(CancellationToken.None);await using var verify=provider.CreateAsyncScope();Assert.Equal(ExportJobStatus.Succeeded,(await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().ExportJobs.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task Telegram_Start_Code_Links_Only_Matching_Pending_Organization()
     {
         await using var db=CreateDb();const string code="link-code";db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",LinkCodeHash=TokenTools.Hash(code),LinkCodeExpiresAt=DateTimeOffset.UtcNow.AddMinutes(5)});await db.SaveChangesAsync();var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var client=new TelegramClient(new HttpClient(new OkHandler()),config);using var update=JsonDocument.Parse("""{"message":{"text":"/start link-code","chat":{"id":12345}}}""");
@@ -92,6 +113,13 @@ public sealed class SaasFeaturesTests
         var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationDeliveries.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,DeduplicationKey="retry",Message="Safe message"});await db.SaveChangesAsync();}
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var worker=new NotificationDeliveryWorker(provider.GetRequiredService<IServiceScopeFactory>(),new TelegramClient(new HttpClient(new StatusHandler(HttpStatusCode.InternalServerError)),config),NullLogger<NotificationDeliveryWorker>.Instance);await worker.ProcessOneAsync(CancellationToken.None);
         await using var verify=provider.CreateAsyncScope();var delivery=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().NotificationDeliveries.SingleAsync();Assert.Equal(NotificationDeliveryStatus.RetryScheduled,delivery.Status);Assert.Equal("TELEGRAM_REJECTED",delivery.ErrorCode);Assert.True(delivery.NextAttemptAt>DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Notification_Worker_Reclaims_Stale_Sending_Delivery()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status="Active",ChatId=123});db.NotificationDeliveries.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",EventType=NotificationEventType.MissingCost,DeduplicationKey="stale",Message="Safe message",Status=NotificationDeliveryStatus.Sending,StartedAt=DateTimeOffset.UtcNow.AddMinutes(-20)});await db.SaveChangesAsync();}
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();await new NotificationDeliveryWorker(provider.GetRequiredService<IServiceScopeFactory>(),new TelegramClient(new HttpClient(new OkHandler()),config),NullLogger<NotificationDeliveryWorker>.Instance).ProcessOneAsync(CancellationToken.None);await using var verify=provider.CreateAsyncScope();var delivery=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().NotificationDeliveries.SingleAsync();Assert.Equal(NotificationDeliveryStatus.Sent,delivery.Status);Assert.Equal(1,delivery.Attempt);
     }
 
     [Fact]
