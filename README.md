@@ -51,7 +51,6 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 - `TELEGRAM_BOT_TOKEN` — token от BotFather;
 - `TELEGRAM_BOT_USERNAME` — имя бота без `@`;
 - `TELEGRAM_WEBHOOK_SECRET` — случайный secret token для заголовка Telegram webhook;
-- `ENABLE_OPENAPI=true` — включает `/openapi/v1.json` вне Development.
 - `EMAIL_CONFIRMATION_REQUIRED=true` — требует подтверждённый email для входа;
 - `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD`, `EMAIL_FROM` — доставка confirmation/reset писем.
 
