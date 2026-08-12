@@ -36,6 +36,12 @@ public sealed class OrderQueryTests
         Assert.Equal("high",result.GetProperty("items")[0].GetProperty("externalId").GetString());
     }
 
+    [Fact]
+    public async Task OrdersAsync_Returns_Delivery_And_Pending_Status_For_List()
+    {
+        await using var db=CreateDb();db.Products.Add(Product("p1","org","A"));db.Orders.Add(new(){Id="pending",ExternalId="pending",OrganizationId="org",Date=new(2026,8,12),Status=OrderStatus.Pending,Lines=[new(){Id=Guid.NewGuid(),OrderId="pending",ProductId="p1",Revenue=1000,Quantity=1,Delivery=250}]});await db.SaveChangesAsync();var result=JsonSerializer.SerializeToElement(await DbAnalytics.OrdersAsync(db,"org",status:"PENDING"));var item=result.GetProperty("items")[0];Assert.Equal("PENDING",item.GetProperty("status").GetString());Assert.Equal(250,item.GetProperty("delivery").GetDecimal());Assert.False(item.GetProperty("complete").GetBoolean());
+    }
+
     private static ProductEntity Product(string id,string org,string sku)=>new(){Id=id,OrganizationId=org,Sku=sku,Name=sku};
     private static ProductCostHistoryEntity Cost(string product,string org)=>new(){Id=Guid.NewGuid(),OrganizationId=org,ProductId=product,CostAmount=100m,EffectiveFrom=new(2026,1,1),Source=CostSource.Manual,CreatedByUserId="test"};
     private static OrderEntity Order(string id,string org,string product,DateOnly date,OrderStatus status,decimal revenue)=>new(){Id=id,ExternalId=id,OrganizationId=org,Date=date,CompletionDate=date,Status=status,Lines=[new(){Id=Guid.NewGuid(),OrderId=id,ProductId=product,Revenue=revenue,Quantity=1}]};

@@ -199,7 +199,7 @@ function App() {
     if (!range) return;
     const query = `?dateFrom=${range.from}&dateTo=${range.to}&completeCostsOnly=${completeCostsOnly}`;
     setLoading(true);
-    Promise.all([fetch("/api/v1/analytics/summary" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/products" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/timeseries" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/orders", { headers }).then((r) => (r.ok ? r.json() : Promise.reject())),fetch("/api/v1/analytics/problems"+query,{headers}).then(r=>r.ok?r.json():Promise.reject())])
+    Promise.all([fetch("/api/v1/analytics/summary" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/products" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/analytics/timeseries" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())), fetch("/api/v1/orders" + query, { headers }).then((r) => (r.ok ? r.json() : Promise.reject())),fetch("/api/v1/analytics/problems"+query,{headers}).then(r=>r.ok?r.json():Promise.reject())])
       .then(([s, p, t, o, problems]) => {
         setSummary(s);
         setProducts(p);
@@ -251,7 +251,7 @@ function App() {
         </header>
         {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} problems={dashboardProblems} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} onNavigate={navigate} onProduct={(id)=>{setFocusedProductId(id);navigate("products")}} />}
         {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} openProductId={focusedProductId} />}
-        {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} />}
+        {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} initialDateFrom={activeRange?.from} initialDateTo={activeRange?.to} />}
         {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
         {page === "integrations" && <KaspiConnections session={session} />}
         {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
@@ -669,13 +669,15 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
   );
 }
 
-function OrdersPage({ initialOrders, session, products }: { initialOrders: Order[]; session: Session; products: Product[] }) {
+function OrdersPage({ initialOrders, session, products, initialDateFrom, initialDateTo }: { initialOrders: Order[]; session: Session; products: Product[]; initialDateFrom?: string; initialDateTo?: string }) {
   const [orders, setOrders] = useState(initialOrders),
     [detail, setDetail] = useState<any>(null),
     [status, setStatus] = useState(""),
     [productId, setProductId] = useState(""),
     [profitFrom, setProfitFrom] = useState(""),
     [profitTo, setProfitTo] = useState(""),
+    [dateFrom, setDateFrom] = useState(initialDateFrom ?? ""),
+    [dateTo, setDateTo] = useState(initialDateTo ?? ""),
     [search, setSearch] = useState(""),
     [page, setPage] = useState(1),
     [totalPages, setTotalPages] = useState(1),
@@ -689,6 +691,8 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
     if (productId) q.set("productId", productId);
     if (profitFrom) q.set("profitFrom", profitFrom);
     if (profitTo) q.set("profitTo", profitTo);
+    if (dateFrom) q.set("dateFrom", dateFrom);
+    if (dateTo) q.set("dateTo", dateTo);
     if (search) q.set("search", search);
     const r = await fetch("/api/v1/orders?" + q, { headers });
     if (r.ok) {
@@ -704,6 +708,7 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
     setOrders(initialOrders);
     setTotal(initialOrders.length);
   }, [initialOrders]);
+  useEffect(() => { setDateFrom(initialDateFrom ?? ""); setDateTo(initialDateTo ?? ""); }, [initialDateFrom, initialDateTo]);
   const apply = (e: React.FormEvent) => {
     e.preventDefault();
     load(1);
@@ -728,8 +733,10 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
           <option value="COMPLETED">Completed</option>
           <option value="RETURNED">Returned</option>
           <option value="CANCELLED">Cancelled</option>
-          <option value="ACCEPTED_BY_MERCHANT">В обработке</option>
+          <option value="PENDING">В обработке</option>
         </select>
+        <label className="order-date">С<input aria-label="Заказы с даты" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
+        <label className="order-date">По<input aria-label="Заказы по дату" type="date" min={dateFrom} value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
         <select aria-label="Товар" value={productId} onChange={(e) => setProductId(e.target.value)}>
           <option value="">Все товары</option>
           {products.map((p) => (
@@ -754,6 +761,7 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
                 <th>Статус</th>
                 <th>Сумма</th>
                 <th>Комиссия</th>
+                <th>Доставка</th>
                 <th>Прибыль</th>
                 <th>Расчёт</th>
               </tr>
@@ -766,6 +774,7 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
                   <td>{o.status}</td>
                   <td>{money(o.amount)}</td>
                   <td>{money(o.fees ?? 0)}</td>
+                  <td>{money(o.delivery ?? 0)}</td>
                   <td>{money(o.profit ?? null)}</td>
                   <td>
                     <span className={o.complete ? "pill" : "pill missing"}>{o.complete ? "Полный" : "Нужна себестоимость"}</span>
@@ -821,9 +830,15 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
                 <b>{money(detail.delivery)}</b>
               </div>
               <div>
+                <span>Прочие переменные расходы</span>
+                <b>{money((detail.variableCosts ?? 0) - (detail.marketplaceFees ?? 0) - (detail.delivery ?? 0))}</b>
+              </div>
+              <div>
                 <span>Операционная прибыль</span>
                 <b>{money(detail.operatingProfit)}</b>
               </div>
+              <div><span>Маржа</span><b>{pct(detail.operatingMarginPct)}</b></div>
+              <div><span>Coverage</span><b>{pct(detail.coveragePct)}</b></div>
             </div>
             <h3>Товарные строки</h3>
             {detail.lines?.map((l: any) => (
@@ -837,7 +852,7 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
                 <div>
                   <b>{money(l.profit)}</b>
                   <span>
-                    выручка {money(l.revenue)} · base price {money(l.basePrice)} · комиссия {money(l.fee)} · доставка {money(l.delivery)}
+                    выручка {money(l.revenue)} · себестоимость {l.unitCost === null ? "не указана" : `${money(l.unitCost)} × ${l.quantity}`} · комиссия {money(l.fee)} · доставка {money(l.delivery)} · прочие {money(l.otherVariableCosts)}
                   </span>
                 </div>
               </div>

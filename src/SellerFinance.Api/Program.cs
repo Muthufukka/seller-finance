@@ -195,6 +195,8 @@ api.MapGet("/analytics/problems",async(HttpContext c,SellerFinanceDbContext db,D
 api.MapGet("/orders", async (HttpContext c, SellerFinanceDbContext db,string? status,DateOnly? dateFrom,DateOnly? dateTo,string? productId,decimal? profitFrom,decimal? profitTo,string? search,bool completeCostsOnly=false,int page=1,int pageSize=50) =>
 {
     if(dateFrom.HasValue&&dateTo.HasValue&&dateFrom>dateTo)return Results.BadRequest(new{title="dateFrom не может быть позже dateTo"});
+    if(profitFrom.HasValue&&profitTo.HasValue&&profitFrom>profitTo)return Results.BadRequest(new{title="profitFrom cannot be greater than profitTo"});
+    if(!String.IsNullOrWhiteSpace(status)&&!Enum.TryParse<SellerFinance.Domain.OrderStatus>(status,true,out _))return Results.BadRequest(new{title="Unknown order status"});
     if(page<1||pageSize is <1 or >100)return Results.BadRequest(new{title="page должен быть не меньше 1, pageSize — от 1 до 100"});
     return Results.Ok(await DbAnalytics.OrdersAsync(db,c.Tenant(),status,dateFrom,dateTo,productId,profitFrom,profitTo,search,page,pageSize,completeCostsOnly));
 });
