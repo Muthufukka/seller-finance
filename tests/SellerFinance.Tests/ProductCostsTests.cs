@@ -10,6 +10,16 @@ namespace SellerFinance.Tests;
 public sealed class ProductCostsTests
 {
     [Fact]
+    public void Abc_Group_Includes_Threshold_Crossing_Product_And_Puts_Nonpositive_Last()
+    {
+        Assert.Equal("A",DbAnalytics.AbcGroup(0,90,100));
+        Assert.Equal("B",DbAnalytics.AbcGroup(90,6,100));
+        Assert.Equal("C",DbAnalytics.AbcGroup(96,4,100));
+        Assert.Equal("C",DbAnalytics.AbcGroup(0,0,0));
+        Assert.Equal("C",DbAnalytics.AbcGroup(50,-1,100));
+    }
+
+    [Fact]
     public async Task Analytics_Uses_Latest_Cost_Effective_On_Order_Date()
     {
         await using var db=CreateDb();

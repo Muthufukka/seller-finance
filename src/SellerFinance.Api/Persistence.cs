@@ -699,7 +699,12 @@ public static class DbAnalytics
     {
         var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);var expenseRows=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId!=null&&x.OrderId==null&&(!from.HasValue||(x.PeriodEnd??x.Date)>=from)&&(!to.HasValue||x.Date<=to)).ToArrayAsync();var expenses=expenseRows.GroupBy(x=>x.ProductId!).ToDictionary(x=>x.Key,x=>x.Sum(y=>ExpenseRecognition.Amount(y,from,to)));
         var facts=await FactsAsync(db,tenant,from,to,completeCostsOnly);var allLines=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).ToArray();var allocate=await db.Organizations.AsNoTracking().Where(x=>x.Id==tenant).Select(x=>x.AllocateOrganizationExpenses).SingleOrDefaultAsync();var allocations=allocate?await AllocateOrganizationExpensesAsync(db,tenant,allLines,from,to):[];var values=allLines.GroupBy(x=>x.ProductId).Select(g=>{var finance=FinanceCalculator.Calculate([new OrderFact("abc",tenant,OrderStatus.Completed,from??DateOnly.MinValue,g.ToArray())],expenses.GetValueOrDefault(g.Key)+allocations.GetValueOrDefault(g.Key));var value=metric switch{"revenue"=>finance.Revenue,"units"=>g.Sum(x=>x.Quantity),"grossProfit"=>finance.GrossProfit,_=>finance.OperatingProfit};return new{ProductId=g.Key,Value=value,Revenue=finance.Revenue,Profit=finance.OperatingProfit,Units=g.Sum(x=>x.Quantity)};}).OrderByDescending(x=>x.Value).ToArray();
-        var total=values.Where(x=>x.Value>0).Sum(x=>x.Value);decimal cumulative=0;return values.Select(x=>{if(x.Value>0)cumulative+=x.Value;var share=total==0?0:Decimal.Round(cumulative/total*100m,2);var group=share<=80?"A":share<=95?"B":"C";products.TryGetValue(x.ProductId,out var p);return(object)new{productId=x.ProductId,sku=p?.Sku??x.ProductId,name=p?.Name??"Несопоставленный товар",x.Value,x.Revenue,x.Profit,x.Units,cumulativePct=share,group};}).ToArray();
+        var total=values.Where(x=>x.Value>0).Sum(x=>x.Value);decimal cumulative=0;return values.Select(x=>{var group=AbcGroup(cumulative,x.Value,total);if(x.Value>0)cumulative+=x.Value;var share=total==0?0:Decimal.Round(cumulative/total*100m,2);products.TryGetValue(x.ProductId,out var p);return(object)new{productId=x.ProductId,sku=p?.Sku??x.ProductId,name=p?.Name??"Несопоставленный товар",x.Value,x.Revenue,x.Profit,x.Units,cumulativePct=share,group};}).ToArray();
+    }
+
+    public static string AbcGroup(decimal priorCumulative,decimal value,decimal positiveTotal)
+    {
+        if(value<=0||positiveTotal<=0)return "C";var priorPct=priorCumulative/positiveTotal*100m;return priorPct<80m?"A":priorPct<95m?"B":"C";
     }
 
     public static async Task<object?> OrderDetailAsync(SellerFinanceDbContext db,string tenant,string id)

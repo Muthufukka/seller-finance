@@ -52,6 +52,12 @@ const kaspiRu={
 const kaspiKk:Record<keyof typeof kaspiRu,string>={
   "kaspi.operationError":"Операция орындалмады","kaspi.loadError":"Kaspi қосылымдарын жүктеу мүмкін болмады","kaspi.connected":"Дүкен қосылды","kaspi.syncQueued":"Синхрондау кезекке қойылды","kaspi.tokenValid":"Токен жарамды","kaspi.newTokenPrompt":"Жаңа API-токен","kaspi.tokenReplaced":"Токен ауыстырылды","kaspi.disconnectConfirmPrefix":"Дүкенді ажырату","kaspi.disconnectConfirmSuffix":"Тарихи тапсырыстар сақталады.","kaspi.disconnected":"Дүкен ажыратылды","kaspi.eyebrow":"ИНТЕГРАЦИЯЛАР","kaspi.title":"Kaspi дүкендері","kaspi.plan":"Тариф","kaspi.connectedCount":"қосылған","kaspi.of":"ішінен","kaspi.securityLead":"Токендер шифрланады және қайта көрсетілмейді.","kaspi.status":"Күйі","kaspi.lastVerification":"Соңғы тексеру","kaspi.lastSync":"Соңғы синхрондау","kaspi.lastJob":"Соңғы тапсырма","kaspi.orders":"тапсырыс","kaspi.safeError":"Қауіпсіз қате","kaspi.sync":"Синхрондау","kaspi.verify":"Тексеру","kaspi.replaceToken":"Токенді ауыстыру","kaspi.disconnect":"Ажырату","kaspi.connectTitle":"Дүкенді қосу","kaspi.storeName":"Дүкен атауы","kaspi.storeExample":"Мысалы, Негізгі дүкен","kaspi.apiToken":"Kaspi API-токені","kaspi.tokenPlaceholder":"Сатушы кабинетіндегі токен","kaspi.checking":"Тексерілуде…","kaspi.verifyConnect":"Тексеру және қосу","kaspi.empty":"Қосылған дүкендер әзірге жоқ.","kaspi.pendingVerification":"Тексеруді күтуде","kaspi.active":"Белсенді","kaspi.requiresAttention":"Назар аудару қажет","kaspi.disabled":"Ажыратылған","kaspi.queued":"Кезекте","kaspi.running":"Орындалуда","kaspi.succeeded":"Аяқталды","kaspi.retryScheduled":"Қайталау жоспарланды"
 };
+const abcRu={
+  "abc.eyebrow":"АССОРТИМЕНТ","abc.title":"ABC-анализ","abc.lead":"Группы A/B/C по накопительному вкладу 80/15/5.","abc.metric":"Метрика ABC-анализа","abc.operatingProfit":"Операционная прибыль","abc.grossProfit":"Валовая прибыль","abc.revenue":"Выручка","abc.units":"Количество","abc.group":"Группа","abc.product":"Товар","abc.value":"Значение","abc.expenses":"Расходы","abc.profit":"Прибыль","abc.cumulative":"Накопительно","abc.loading":"Загрузка ABC-анализа…","abc.error":"Не удалось загрузить ABC-анализ","abc.empty":"За выбранный период данных для ABC-анализа нет."
+} as const;
+const abcKk:Record<keyof typeof abcRu,string>={
+  "abc.eyebrow":"АССОРТИМЕНТ","abc.title":"ABC-талдау","abc.lead":"Жинақталған үлесі 80/15/5 бойынша A/B/C топтары.","abc.metric":"ABC-талдау метрикасы","abc.operatingProfit":"Операциялық пайда","abc.grossProfit":"Жалпы пайда","abc.revenue":"Түсім","abc.units":"Саны","abc.group":"Топ","abc.product":"Тауар","abc.value":"Мәні","abc.expenses":"Шығындар","abc.profit":"Пайда","abc.cumulative":"Жинақталған","abc.loading":"ABC-талдау жүктелуде…","abc.error":"ABC-талдауды жүктеу мүмкін болмады","abc.empty":"Таңдалған кезеңде ABC-талдау үшін дерек жоқ."
+};
 
 export const ru = {
   ...ordersRu,
@@ -61,6 +67,7 @@ export const ru = {
   ...exportsRu,
   ...settingsRu,
   ...kaspiRu,
+  ...abcRu,
   "brand.name": "Seller Finance",
   "common.wait": "Подождите…",
   "common.logout": "выйти",
@@ -128,6 +135,7 @@ const kk:Record<TranslationKey,string>={
   ...exportsKk,
   ...settingsKk,
   ...kaspiKk,
+  ...abcKk,
   "brand.name":"Seller Finance","common.wait":"Күте тұрыңыз…","common.logout":"шығу","common.create":"Құру",
   "auth.login.title":"Кіру","auth.login.lead":"Пайда мен өзіндік құнды бір жерден басқарыңыз.","auth.login.submit":"Кіру",
   "auth.register.title":"Тіркелгі ашу","auth.register.lead":"Сатушының қорғалған жұмыс кеңістігін құрыңыз.","auth.register.submit":"Тіркелу","auth.register.name":"Атыңыз","auth.register.organization":"Ұйым атауы",

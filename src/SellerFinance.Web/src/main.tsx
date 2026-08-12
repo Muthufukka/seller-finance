@@ -1092,31 +1092,43 @@ function Integrations({ session }: { session: Session }) {
 }
 
 function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Session; completeCostsOnly: boolean; dateFrom?: string; dateTo?: string }) {
+  const { t, locale } = useI18n();
   const [metric, setMetric] = useState("profit"),
-    [rows, setRows] = useState<any[]>([]);
+    [rows, setRows] = useState<any[]>([]),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState("");
   useEffect(() => {
+    const controller = new AbortController();
     const query = new URLSearchParams({ metric, completeCostsOnly: String(completeCostsOnly) });
     if (dateFrom) query.set("dateFrom", dateFrom);
     if (dateTo) query.set("dateTo", dateTo);
+    setLoading(true);
+    setError("");
+    setRows([]);
     fetch(`/api/v1/analytics/abc?${query}`, {
       headers: { "X-Organization-Id": session.organizationId },
+      signal: controller.signal,
     })
-      .then((r) => r.json())
-      .then(setRows);
-  }, [metric, completeCostsOnly, dateFrom, dateTo]);
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then(setRows)
+      .catch(() => { if (!controller.signal.aborted) setError(t("abc.error")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [metric, completeCostsOnly, dateFrom, dateTo, session.organizationId, t]);
+  const value = (row:any) => metric === "units" ? Number(row.value).toLocaleString(locale === "kk" ? "kk-KZ" : "ru-RU") : money(row.value);
   return (
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">АССОРТИМЕНТ</span>
-          <h1>ABC-анализ</h1>
-          <p>Группы A/B/C по накопительному вкладу 80/15/5.</p>
+          <span className="eyebrow">{t("abc.eyebrow")}</span>
+          <h1>{t("abc.title")}</h1>
+          <p>{t("abc.lead")}</p>
         </div>
-        <select value={metric} onChange={(e) => setMetric(e.target.value)}>
-          <option value="profit">Операционная прибыль</option>
-          <option value="grossProfit">Валовая прибыль</option>
-          <option value="revenue">Выручка</option>
-          <option value="units">Количество</option>
+        <select value={metric} onChange={(e) => setMetric(e.target.value)} aria-label={t("abc.metric")}>
+          <option value="profit">{t("abc.operatingProfit")}</option>
+          <option value="grossProfit">{t("abc.grossProfit")}</option>
+          <option value="revenue">{t("abc.revenue")}</option>
+          <option value="units">{t("abc.units")}</option>
         </select>
       </div>
       <article className="table-card standalone">
@@ -1124,13 +1136,13 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
           <table>
             <thead>
               <tr>
-                <th>Группа</th>
-                <th>Товар</th>
-                <th>Значение</th>
-                <th>Выручка</th>
-                <th>Расходы</th>
-                <th>Прибыль</th>
-                <th>Накопительно</th>
+                <th>{t("abc.group")}</th>
+                <th>{t("abc.product")}</th>
+                <th>{t("abc.value")}</th>
+                <th>{t("abc.revenue")}</th>
+                <th>{t("abc.expenses")}</th>
+                <th>{t("abc.profit")}</th>
+                <th>{t("abc.cumulative")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1145,8 +1157,9 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
                       <small>{r.sku}</small>
                     </div>
                   </td>
-                  <td>{money(r.value)}</td>
+                  <td>{value(r)}</td>
                   <td>{money(r.revenue)}</td>
+                  <td>{money(r.revenue-r.profit)}</td>
                   <td>{money(r.profit)}</td>
                   <td>{pct(r.cumulativePct)}</td>
                 </tr>
@@ -1155,6 +1168,9 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
           </table>
         </div>
       </article>
+      {loading && <p className="muted">{t("abc.loading")}</p>}
+      {error && <p className="integration-message">{error}</p>}
+      {!loading && !error && !rows.length && <div className="empty-row">{t("abc.empty")}</div>}
     </section>
   );
 }
