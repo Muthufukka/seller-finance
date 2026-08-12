@@ -6,3 +6,5 @@ dist/
 *.user
 *.suo
 *.tsbuildinfo
+migration.sql
+**/TestResults/

@@ -5,6 +5,9 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Npgsql;
 using SellerFinance.Domain;
 using System.Text.Json;
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace SellerFinance.Api;
 
@@ -34,6 +37,18 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<OrganizationFeatureFlagEntity> OrganizationFeatureFlags => Set<OrganizationFeatureFlagEntity>();
     public DbSet<SubscriptionEntity> Subscriptions => Set<SubscriptionEntity>();
 
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        var tenants=ChangedTenants();var result=base.SaveChanges(acceptAllChangesOnSuccess);foreach(var tenant in tenants)DbAnalytics.Invalidate(tenant);return result;
+    }
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess,CancellationToken cancellationToken=default)
+    {
+        var tenants=ChangedTenants();var result=await base.SaveChangesAsync(acceptAllChangesOnSuccess,cancellationToken);foreach(var tenant in tenants)DbAnalytics.Invalidate(tenant);return result;
+    }
+
+    private string[] ChangedTenants()=>ChangeTracker.Entries().Where(x=>x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).Select(x=>x.Entity switch{OrganizationEntity organization=>organization.Id,_=>x.Metadata.FindProperty("OrganizationId") is null?null:x.Property("OrganizationId").CurrentValue as string}).Where(x=>!String.IsNullOrWhiteSpace(x)).Distinct().Cast<string>().ToArray();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -43,6 +58,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrderEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderEntity>().HasIndex(x => new { x.MarketplaceConnectionId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderEntity>().HasIndex(x=>new{x.OrganizationId,x.Date});
+        modelBuilder.Entity<OrderEntity>().HasIndex(x=>new{x.OrganizationId,x.Status,x.CompletionDate});
         modelBuilder.Entity<OrderEntity>().Property(x=>x.TotalPrice).HasPrecision(19,4);
         modelBuilder.Entity<OrderEntity>().Property(x=>x.SellerDeliveryCost).HasPrecision(19,4);
         modelBuilder.Entity<OrderEntity>().HasOne<MarketplaceConnectionEntity>().WithMany().HasForeignKey(x=>x.MarketplaceConnectionId).OnDelete(DeleteBehavior.Restrict);
@@ -84,6 +100,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<ExpenseEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<ExpenseEntity>().Property(x => x.Amount).HasPrecision(19,4);
         modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.Date });
+        modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.OrderId, x.Date });
         modelBuilder.Entity<ExpenseEntity>().HasIndex(x => new { x.OrganizationId, x.ImportFingerprint }).IsUnique().HasFilter("\"ImportFingerprint\" IS NOT NULL");
         modelBuilder.Entity<FinancialImportJobEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<FinancialImportJobEntity>().HasIndex(x => new { x.OrganizationId, x.CreatedAt });
@@ -552,6 +569,16 @@ public static class DatabaseSeed
 
 public static class DbAnalytics
 {
+    private readonly record struct FactsCacheKey(string Database,string Tenant,DateOnly? From,DateOnly? To,bool CompleteCostsOnly,long Version);
+    private static readonly ConcurrentDictionary<string,long> Versions=new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<FactsCacheKey,Lazy<Task<IReadOnlyList<OrderFact>>>> FactsCache=[];
+
+    public static void Invalidate(string tenant)
+    {
+        Versions.AddOrUpdate(tenant,1,(_,version)=>version+1);
+        if(FactsCache.Count>256)foreach(var key in FactsCache.Keys.Where(x=>x.Version<Versions.GetValueOrDefault(x.Tenant)-1))FactsCache.TryRemove(key,out _);
+    }
+
     public static async Task<object> SummaryAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
         var facts = await FactsAsync(db, tenant,from,to,completeCostsOnly);
@@ -663,12 +690,19 @@ public static class DbAnalytics
 
     private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
+        var database=db.Database.IsRelational()?Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(db.Database.GetConnectionString()??db.Database.ProviderName??"relational"))):db.ContextId.InstanceId.ToString("N");var key=new FactsCacheKey(database,tenant,from,to,completeCostsOnly,Versions.GetValueOrDefault(tenant));var lazy=FactsCache.GetOrAdd(key,_=>new(()=>LoadFactsAsync(db,tenant,from,to,completeCostsOnly),LazyThreadSafetyMode.ExecutionAndPublication));
+        try{return await lazy.Value;}catch{FactsCache.TryRemove(key,out _);throw;}
+    }
+
+    private static async Task<IReadOnlyList<OrderFact>> LoadFactsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from,DateOnly? to,bool completeCostsOnly)
+    {
         var orders=await db.Orders.AsNoTracking().Include(x=>x.Lines).Where(x=>x.OrganizationId==tenant&&(!from.HasValue||(x.CompletionDate??x.Date)>=from)&&(!to.HasValue||(x.CompletionDate??x.Date)<=to)).ToArrayAsync();
-        var costs=await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==tenant).OrderByDescending(x=>x.EffectiveFrom).ToArrayAsync();
+        var costs=(await db.ProductCostHistory.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync()).GroupBy(x=>x.ProductId).ToDictionary(x=>x.Key,x=>x.OrderByDescending(y=>y.EffectiveFrom).ToArray());
         var actualFees=await db.ActualFees.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.OrderLineId,x=>x.Amount);
-        var rules=await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
-        var orderIds=orders.Where(x=>x.Status==OrderStatus.Completed).Select(x=>x.Id).ToArray();var orderExpenses=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.OrderId!=null&&orderIds.Contains(x.OrderId)&&(!from.HasValue||(x.PeriodEnd??x.Date)>=from)&&(!to.HasValue||x.Date<=to)).ToArrayAsync();
-        return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;var expenseTotal=orderExpenses.Where(e=>e.OrderId==x.Id).Sum(e=>ExpenseRecognition.Amount(e,from,to));var lines=x.Lines.Select(y=>{products.TryGetValue(y.ProductId,out var product);var rule=rules.Where(r=>r.EffectiveFrom<=calculationDate&&(!r.EffectiveTo.HasValue||r.EffectiveTo>=calculationDate)&&(r.Scope==FeeRuleScope.Default||r.Scope==FeeRuleScope.Product&&r.ProductId==y.ProductId||r.Scope==FeeRuleScope.Category&&r.Category==product?.Category)).OrderByDescending(r=>r.Scope).ThenByDescending(r=>r.EffectiveFrom).FirstOrDefault();decimal? actual=actualFees.TryGetValue(y.Id,out var imported)?imported:y.ActualFee;var rate=y.FeeRate;if(actual is null&&rule is not null){if(rule.ValueType==FeeValueType.Fixed)actual=rule.Value;else rate=rule.Value/100m;}return new OrderLine(y.ProductId,y.Revenue,y.Quantity,costs.FirstOrDefault(c=>c.ProductId==y.ProductId&&c.EffectiveFrom<=calculationDate)?.CostAmount,actual,rate,y.Delivery,y.OtherVariableCosts);}).ToArray();if(completeCostsOnly)lines=lines.Where(y=>y.UnitCost.HasValue).ToArray();var allocations=FinanceCalculator.AllocateByRevenue(expenseTotal,lines.Select(y=>y.Revenue).ToArray());lines=lines.Select((line,index)=>line with{OtherVariableCosts=line.OtherVariableCosts+allocations[index]}).ToArray();return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,lines);}).Where(x=>!completeCostsOnly||x.Lines.Count>0).ToArray();
+        var ruleRows=await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();var defaultRules=ruleRows.Where(x=>x.Scope==FeeRuleScope.Default).OrderByDescending(x=>x.EffectiveFrom).ToArray();var productRules=ruleRows.Where(x=>x.Scope==FeeRuleScope.Product&&x.ProductId!=null).GroupBy(x=>x.ProductId!).ToDictionary(x=>x.Key,x=>x.OrderByDescending(y=>y.EffectiveFrom).ToArray());var categoryRules=ruleRows.Where(x=>x.Scope==FeeRuleScope.Category&&x.Category!=null).GroupBy(x=>x.Category!).ToDictionary(x=>x.Key,x=>x.OrderByDescending(y=>y.EffectiveFrom).ToArray());var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
+        var completedOrderIds=orders.Where(x=>x.Status==OrderStatus.Completed).Select(x=>x.Id).ToHashSet();var orderExpenseRows=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.OrderId!=null&&(!from.HasValue||(x.PeriodEnd??x.Date)>=from)&&(!to.HasValue||x.Date<=to)).ToArrayAsync();var orderExpenses=orderExpenseRows.Where(x=>completedOrderIds.Contains(x.OrderId!)).GroupBy(x=>x.OrderId!).ToDictionary(x=>x.Key,x=>x.Sum(y=>ExpenseRecognition.Amount(y,from,to)));
+        FeeRuleEntity? Active(FeeRuleEntity[] source,DateOnly date)=>source.FirstOrDefault(x=>x.EffectiveFrom<=date&&(!x.EffectiveTo.HasValue||x.EffectiveTo>=date));
+        return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;var expenseTotal=orderExpenses.GetValueOrDefault(x.Id);var lines=x.Lines.Select(y=>{products.TryGetValue(y.ProductId,out var product);FeeRuleEntity? rule=null;if(productRules.TryGetValue(y.ProductId,out var perProduct))rule=Active(perProduct,calculationDate);if(rule is null&&product?.Category is not null&&categoryRules.TryGetValue(product.Category,out var perCategory))rule=Active(perCategory,calculationDate);rule??=Active(defaultRules,calculationDate);decimal? actual=actualFees.TryGetValue(y.Id,out var imported)?imported:y.ActualFee;var rate=y.FeeRate;if(actual is null&&rule is not null){if(rule.ValueType==FeeValueType.Fixed)actual=rule.Value;else rate=rule.Value/100m;}costs.TryGetValue(y.ProductId,out var productCosts);var cost=productCosts?.FirstOrDefault(c=>c.EffectiveFrom<=calculationDate)?.CostAmount;return new OrderLine(y.ProductId,y.Revenue,y.Quantity,cost,actual,rate,y.Delivery,y.OtherVariableCosts);}).ToArray();if(completeCostsOnly)lines=lines.Where(y=>y.UnitCost.HasValue).ToArray();var allocations=FinanceCalculator.AllocateByRevenue(expenseTotal,lines.Select(y=>y.Revenue).ToArray());lines=lines.Select((line,index)=>line with{OtherVariableCosts=line.OtherVariableCosts+allocations[index]}).ToArray();return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,lines);}).Where(x=>!completeCostsOnly||x.Lines.Count>0).ToArray();
     }
 
     private static async Task<Dictionary<string,decimal>> AllocateOrganizationExpensesAsync(SellerFinanceDbContext db,string tenant,IReadOnlyList<OrderLine> lines,DateOnly? from,DateOnly? to)

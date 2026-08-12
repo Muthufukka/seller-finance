@@ -25,7 +25,9 @@ jobs:
       - name: Restore backend
         run: dotnet tool restore && dotnet restore SellerFinance.slnx
       - name: Test backend and API E2E
-        run: dotnet test SellerFinance.slnx --configuration Release --no-restore --logger "trx;LogFileName=tests.trx"
+        run: dotnet test SellerFinance.slnx --configuration Release --no-restore --filter "Category!=Performance" --logger "trx;LogFileName=tests.trx"
+      - name: Performance gate — 100k order items
+        run: dotnet test SellerFinance.slnx --configuration Release --no-restore --no-build --filter "Category=Performance" --logger "trx;LogFileName=performance.trx" --logger "console;verbosity=detailed"
       - name: Install frontend dependencies
         working-directory: src/SellerFinance.Web
         run: pnpm install --frozen-lockfile
