@@ -35,13 +35,18 @@ public sealed class KaspiIntegrationTests
     public async Task Client_Parses_Official_JsonApi_Order_Shape()
     {
         const string json="""{"data":[{"type":"orders","id":"id-1","attributes":{"code":"123","totalPrice":14990,"status":"COMPLETED","creationDate":1786453200000}}]}""";
-        var http=new HttpClient(new StubHandler(HttpStatusCode.OK,json)){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")};
+        const string entries="""{"data":[{"type":"orderentries","id":"entry-1","attributes":{"quantity":2,"totalPrice":14990,"deliveryCost":500}}]}""";const string product="""{"data":{"type":"masterproducts","id":"product-1","attributes":{"code":"SKU-1","name":"Товар","category":"Категория"}}}""";
+        var http=new HttpClient(new RouteHandler(json,entries,product)){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")};
         var result=await new KaspiClient(http).GetOrdersAsync("token",DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,CancellationToken.None);
-        Assert.True(result.Success);Assert.Single(result.Orders);Assert.Equal("123",result.Orders[0].Code);Assert.Equal(14990,result.Orders[0].TotalPrice);
+        Assert.True(result.Success);Assert.Single(result.Orders);Assert.Equal("123",result.Orders[0].Code);Assert.Equal("SKU-1",Assert.Single(result.Orders[0].Lines).ProductCode);
     }
 
     private sealed class StubHandler(HttpStatusCode status,string content):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(status){Content=new StringContent(content,Encoding.UTF8,"application/vnd.api+json")});
+    }
+    private sealed class RouteHandler(string orders,string entries,string product):HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){var path=request.RequestUri!.AbsolutePath;var body=path.EndsWith("/product")?product:path.EndsWith("/entries")?entries:orders;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/vnd.api+json")});}
     }
 }

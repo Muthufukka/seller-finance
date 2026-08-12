@@ -37,6 +37,7 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<OrderEntity>().HasKey(x => x.Id);
         modelBuilder.Entity<OrderEntity>().HasIndex(x => new { x.OrganizationId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderLineEntity>().HasKey(x => x.Id);
+        modelBuilder.Entity<OrderLineEntity>().HasIndex(x => new { x.OrderId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.Revenue).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.UnitCost).HasPrecision(19, 4);
         modelBuilder.Entity<OrderLineEntity>().Property(x => x.ActualFee).HasPrecision(19, 4);
@@ -339,6 +340,7 @@ public sealed class OrderLineEntity
 {
     public Guid Id { get; set; }
     public string OrderId { get; set; } = "";
+    public string? ExternalId { get; set; }
     public string ProductId { get; set; } = "";
     public decimal Revenue { get; set; }
     public int Quantity { get; set; }

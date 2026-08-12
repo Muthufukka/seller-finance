@@ -89,7 +89,7 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());
     if (user is null || (await signIn.PasswordSignInAsync(user, request.Password, request.RememberMe, lockoutOnFailure:true)).Succeeded is false)
-        return Results.Problem("Неверный email или пароль", statusCode:401);
+    { db.AuditLogs.Add(new(){Id=Guid.NewGuid(),UserId=user?.Id,Action="auth.login.failed",EntityType="User",EntityId=user?.Id});await db.SaveChangesAsync();return Results.Problem("Неверный email или пароль", statusCode:401); }
     db.AuditLogs.Add(new() { Id=Guid.NewGuid(), UserId=user.Id, Action="auth.login", EntityType="User", EntityId=user.Id });
     await db.SaveChangesAsync();
     return Results.Ok(new { status="authenticated" });
@@ -131,6 +131,8 @@ api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext
     var userId=user.FindFirstValue(ClaimTypes.NameIdentifier)!;
     return Results.Ok(await (from m in db.OrganizationUsers.AsNoTracking() join o in db.Organizations on m.OrganizationId equals o.Id where m.UserId==userId&&m.JoinedAt!=null select new { o.Id,o.Name,role=m.Role.ToString() }).ToArrayAsync());
 });
+api.MapGet("/organizations/{id}/members",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>id!=ctx.Tenant()?Results.NotFound():Results.Ok(await(from m in db.OrganizationUsers.AsNoTracking() join u in db.Users on m.UserId equals u.Id where m.OrganizationId==id&&m.JoinedAt!=null select new{u.Id,u.Email,u.DisplayName,role=m.Role.ToString(),m.JoinedAt}).ToArrayAsync()));
+api.MapPut("/organizations/{id}/members/{userId}/role",async(HttpContext ctx,string id,string userId,ChangeRoleRequest request,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();if(!Enum.TryParse<OrganizationRole>(request.Role,true,out var role)||role==OrganizationRole.Owner)return Results.BadRequest(new{title="Недопустимая роль"});var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId&&x.Role!=OrganizationRole.Owner);if(membership is null)return Results.NotFound();membership.Role=role;AuditWriter.Add(db,ctx,"member.role.changed","OrganizationUser",userId,$"{{\"role\":\"{role}\"}}");await db.SaveChangesAsync();return Results.NoContent();});
 api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db) =>
 {
     if (id!=ctx.Tenant()) return Results.NotFound();
@@ -231,7 +233,7 @@ api.MapPost("/kaspi/sync", async (HttpContext ctx,SellerFinanceDbContext db,Canc
     var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi",ct);
     if(connection is null)return Results.NotFound();
     if(await db.SyncJobs.AnyAsync(x=>x.MarketplaceConnectionId==connection.Id&&(x.Status==SyncJobStatus.Queued||x.Status==SyncJobStatus.Running||x.Status==SyncJobStatus.RetryScheduled),ct))return Results.Conflict(new {title="Синхронизация уже выполняется"});
-    var job=new SyncJobEntity{Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),MarketplaceConnectionId=connection.Id,WindowFrom=DateTimeOffset.UtcNow.AddDays(-30),WindowTo=DateTimeOffset.UtcNow};db.SyncJobs.Add(job);AuditWriter.Add(db,ctx,"integration.sync.queued","SyncJob",job.Id.ToString());await db.SaveChangesAsync(ct);
+    var job=new SyncJobEntity{Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),MarketplaceConnectionId=connection.Id,WindowFrom=connection.LastSuccessfulSyncAt.HasValue?DateTimeOffset.UtcNow.AddDays(-14):DateTimeOffset.UtcNow.AddDays(-90),WindowTo=DateTimeOffset.UtcNow};db.SyncJobs.Add(job);AuditWriter.Add(db,ctx,"integration.sync.queued","SyncJob",job.Id.ToString());await db.SaveChangesAsync(ct);
     return Results.Accepted($"/api/v1/kaspi/sync/{job.Id}",new {job.Id,status=job.Status.ToString()});
 });
 api.MapGet("/kaspi/sync/{id:guid}",async(HttpContext ctx,Guid id,SellerFinanceDbContext db)=>{var job=await db.SyncJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant());return job is null?Results.NotFound():Results.Ok(new{job.Id,status=job.Status.ToString(),job.Attempt,job.ImportedOrders,job.ErrorCode,job.CreatedAt,job.CompletedAt});});
@@ -285,4 +287,5 @@ record ExpenseRequest(string Type,decimal Amount,DateOnly Date,string? ProductId
 record ExportRequest(string ReportType,string Format,DateOnly? DateFrom,DateOnly? DateTo);
 record NotificationRuleRequest(bool Enabled,decimal? Threshold);
 record AdminPlanRequest(string Plan,string? Status);
+record ChangeRoleRequest(string Role);
 public partial class Program { }

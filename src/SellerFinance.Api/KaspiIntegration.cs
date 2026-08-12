@@ -33,34 +33,31 @@ public sealed class TokenCipher(IConfiguration configuration)
     }
 }
 
-public sealed record KaspiOrderDto(string Id,string Code,decimal TotalPrice,string Status,DateTimeOffset CreatedAt);
+public sealed record KaspiOrderLineDto(string EntryId,string ProductCode,string Name,string? Category,int Quantity,decimal Revenue,decimal Delivery);
+public sealed record KaspiOrderDto(string Id,string Code,decimal TotalPrice,string Status,DateTimeOffset CreatedAt,IReadOnlyList<KaspiOrderLineDto> Lines);
 public sealed record KaspiResult(bool Success,HttpStatusCode StatusCode,string? ErrorCode,IReadOnlyList<KaspiOrderDto> Orders);
 
 public sealed class KaspiClient(HttpClient http)
 {
     public async Task<KaspiResult> GetOrdersAsync(string token,DateTimeOffset from,DateTimeOffset to,CancellationToken cancellationToken)
     {
-        var uri=$"orders?page[number]=0&page[size]=100&filter[orders][creationDate][$ge]={from.ToUnixTimeMilliseconds()}&filter[orders][creationDate][$le]={to.ToUnixTimeMilliseconds()}";
-        using var request=new HttpRequestMessage(HttpMethod.Get,uri);
-        request.Headers.TryAddWithoutValidation("X-Auth-Token",token);
-        request.Headers.TryAddWithoutValidation("Accept","application/vnd.api+json");
-        using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancellationToken);
-        if(!response.IsSuccessStatusCode) return new(false,response.StatusCode,MapError(response.StatusCode),[]);
-        await using var stream=await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json=await JsonDocument.ParseAsync(stream,cancellationToken:cancellationToken);
         var orders=new List<KaspiOrderDto>();
-        if(json.RootElement.TryGetProperty("data",out var data)) foreach(var item in data.EnumerateArray())
+        HttpStatusCode statusCode=HttpStatusCode.OK;
+        for(var page=0;page<100;page++)
         {
-            var a=item.GetProperty("attributes");
-            var id=item.GetProperty("id").GetString()!;
-            var code=a.TryGetProperty("code",out var c)?c.ToString():id;
-            var price=a.TryGetProperty("totalPrice",out var p)&&p.TryGetDecimal(out var amount)?amount:0;
-            var status=a.TryGetProperty("status",out var s)?s.GetString()??"PENDING":"PENDING";
-            var millis=a.TryGetProperty("creationDate",out var d)&&d.TryGetInt64(out var ms)?ms:DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            orders.Add(new(id,code,price,status,DateTimeOffset.FromUnixTimeMilliseconds(millis)));
+            var uri=$"orders?page[number]={page}&page[size]=100&filter[orders][creationDate][$ge]={from.ToUnixTimeMilliseconds()}&filter[orders][creationDate][$le]={to.ToUnixTimeMilliseconds()}";using var response=await SendAsync(uri,token,cancellationToken);statusCode=response.StatusCode;if(!response.IsSuccessStatusCode)return new(false,response.StatusCode,MapError(response.StatusCode),[]);await using var stream=await response.Content.ReadAsStreamAsync(cancellationToken);using var json=await JsonDocument.ParseAsync(stream,cancellationToken:cancellationToken);if(!json.RootElement.TryGetProperty("data",out var data))break;var count=0;
+            foreach(var item in data.EnumerateArray()){count++;var a=item.GetProperty("attributes");var id=item.GetProperty("id").GetString()!;var code=a.TryGetProperty("code",out var c)?c.ToString():id;var price=a.TryGetProperty("totalPrice",out var p)&&p.TryGetDecimal(out var amount)?amount:0;var status=a.TryGetProperty("status",out var s)?s.GetString()??"PENDING":"PENDING";var millis=a.TryGetProperty("creationDate",out var d)&&d.TryGetInt64(out var ms)?ms:DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();orders.Add(new(id,code,price,status,DateTimeOffset.FromUnixTimeMilliseconds(millis),[]));}
+            if(count<100)break;
         }
-        return new(true,response.StatusCode,null,orders);
+        var enriched=new List<KaspiOrderDto>();foreach(var order in orders){var lines=await GetLinesAsync(token,order.Id,cancellationToken);if(!lines.Success)return new(false,lines.StatusCode,lines.ErrorCode,[]);enriched.Add(order with{Lines=lines.Lines});}return new(true,statusCode,null,enriched);
     }
+
+    private async Task<(bool Success,HttpStatusCode StatusCode,string? ErrorCode,IReadOnlyList<KaspiOrderLineDto> Lines)> GetLinesAsync(string token,string orderId,CancellationToken ct)
+    {
+        using var response=await SendAsync($"orders/{Uri.EscapeDataString(orderId)}/entries",token,ct);if(!response.IsSuccessStatusCode)return(false,response.StatusCode,MapError(response.StatusCode),[]);await using var stream=await response.Content.ReadAsStreamAsync(ct);using var json=await JsonDocument.ParseAsync(stream,cancellationToken:ct);var lines=new List<KaspiOrderLineDto>();
+        foreach(var entry in json.RootElement.GetProperty("data").EnumerateArray()){var entryId=entry.GetProperty("id").GetString()!;var a=entry.GetProperty("attributes");var quantity=a.TryGetProperty("quantity",out var q)&&q.TryGetInt32(out var qty)?qty:1;var revenue=a.TryGetProperty("totalPrice",out var t)&&t.TryGetDecimal(out var total)?total:0;var delivery=a.TryGetProperty("deliveryCost",out var d)&&d.TryGetDecimal(out var deliveryCost)?deliveryCost:0;using var productResponse=await SendAsync($"orderentries/{Uri.EscapeDataString(entryId)}/product",token,ct);if(!productResponse.IsSuccessStatusCode)return(false,productResponse.StatusCode,MapError(productResponse.StatusCode),[]);await using var productStream=await productResponse.Content.ReadAsStreamAsync(ct);using var productJson=await JsonDocument.ParseAsync(productStream,cancellationToken:ct);var product=productJson.RootElement.GetProperty("data");var pa=product.GetProperty("attributes");var code=pa.TryGetProperty("code",out var c)?c.ToString():product.GetProperty("id").ToString();var name=pa.TryGetProperty("name",out var n)?n.GetString()??code:code;var category=pa.TryGetProperty("category",out var cat)?cat.GetString():null;lines.Add(new(entryId,code,name,category,quantity,revenue,delivery));}return(true,response.StatusCode,null,lines);
+    }
+    private async Task<HttpResponseMessage> SendAsync(string uri,string token,CancellationToken ct){var request=new HttpRequestMessage(HttpMethod.Get,uri);request.Headers.TryAddWithoutValidation("X-Auth-Token",token);request.Headers.TryAddWithoutValidation("Accept","application/vnd.api+json");return await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);}
 
     private static string MapError(HttpStatusCode status)=>status switch { HttpStatusCode.Unauthorized=>"TOKEN_UNAUTHORIZED",HttpStatusCode.Forbidden=>"TOKEN_FORBIDDEN",(HttpStatusCode)429=>"RATE_LIMITED",_ when (int)status>=500=>"KASPI_UNAVAILABLE",_=>"KASPI_REQUEST_FAILED" };
 }
@@ -80,7 +77,7 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
     {
         await using var scope=scopes.CreateAsyncScope(); var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();
         var job=await db.SyncJobs.OrderBy(x=>x.CreatedAt).FirstOrDefaultAsync(x=>(x.Status==SyncJobStatus.Queued||x.Status==SyncJobStatus.RetryScheduled)&&x.NextAttemptAt<=DateTimeOffset.UtcNow,ct);
-        if(job is null)return;
+        if(job is null){var due=await db.MarketplaceConnections.AsNoTracking().FirstOrDefaultAsync(x=>x.Status==MarketplaceConnectionStatus.Active&&(!x.LastSuccessfulSyncAt.HasValue||x.LastSuccessfulSyncAt<DateTimeOffset.UtcNow.AddMinutes(-15)),ct);if(due is not null){db.SyncJobs.Add(new(){Id=Guid.NewGuid(),OrganizationId=due.OrganizationId,MarketplaceConnectionId=due.Id,WindowFrom=due.LastSuccessfulSyncAt.HasValue?DateTimeOffset.UtcNow.AddDays(-14):DateTimeOffset.UtcNow.AddDays(-90),WindowTo=DateTimeOffset.UtcNow});await db.SaveChangesAsync(ct);}return;}
         job.Status=SyncJobStatus.Running; job.StartedAt=DateTimeOffset.UtcNow; job.Attempt++; await db.SaveChangesAsync(ct);
         var connection=await db.MarketplaceConnections.SingleAsync(x=>x.Id==job.MarketplaceConnectionId,ct);
         KaspiResult result;
@@ -93,14 +90,14 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
                 var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.OrganizationId==job.OrganizationId&&x.ExternalId==source.Id,ct);
                 if(order is null) { order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=job.OrganizationId,ExternalId=source.Id}; db.Orders.Add(order); }
                 order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime); order.Status=MapStatus(source.Status);order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
-                if(order.Lines.Count==0) order.Lines.Add(new(){Id=Guid.NewGuid(),OrderId=order.Id,ProductId="kaspi-unmapped",Revenue=source.TotalPrice,Quantity=1}); else order.Lines[0].Revenue=source.TotalPrice;
+                if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId));}foreach(var item in source.Lines){var product=await db.Products.SingleOrDefaultAsync(x=>x.OrganizationId==job.OrganizationId&&x.Sku==item.ProductCode,ct);if(product is null){product=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=job.OrganizationId,Sku=item.ProductCode,Name=item.Name,Category=item.Category};db.Products.Add(product);}else{product.Name=item.Name;product.Category=item.Category;}var line=order.Lines.SingleOrDefault(x=>x.ExternalId==item.EntryId);if(line is null){line=new(){Id=Guid.NewGuid(),OrderId=order.Id,ExternalId=item.EntryId};order.Lines.Add(line);}line.ProductId=product.Id;line.Quantity=item.Quantity;line.Revenue=item.Revenue;line.Delivery=item.Delivery;}
             }
             job.Status=SyncJobStatus.Succeeded; job.CompletedAt=DateTimeOffset.UtcNow; job.ImportedOrders=result.Orders.Count; connection.Status=MarketplaceConnectionStatus.Active; connection.LastSuccessfulSyncAt=DateTimeOffset.UtcNow; connection.LastErrorCode=null;
         }
         else
         {
             job.ErrorCode=result.ErrorCode; var retryable=result.StatusCode==(HttpStatusCode)429||(int)result.StatusCode>=500;
-            if(retryable&&job.Attempt<5){job.Status=SyncJobStatus.RetryScheduled;job.NextAttemptAt=DateTimeOffset.UtcNow.AddSeconds(Math.Pow(2,job.Attempt)*30);}
+            if(retryable&&job.Attempt<5){job.Status=SyncJobStatus.RetryScheduled;job.NextAttemptAt=DateTimeOffset.UtcNow.AddSeconds(Math.Pow(2,job.Attempt)*30+Random.Shared.Next(0,16));}
             else {job.Status=SyncJobStatus.RequiresAttention;job.CompletedAt=DateTimeOffset.UtcNow;connection.Status=MarketplaceConnectionStatus.RequiresAttention;connection.LastErrorCode=result.ErrorCode;}
         }
         await db.SaveChangesAsync(ct);
