@@ -266,7 +266,7 @@ function App() {
         {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
         {page === "fees" && <Fees session={session} products={products} />}
         {page === "exports" && <Exports key={session.organizationId} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
-        {page === "settings" && <SettingsPage session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
+        {page === "settings" && <SettingsPage key={session.organizationId} session={session} onSession={setSession} onDeleted={() => setSession(null)} />}
         {page === "admin" && session.isSaasAdmin && <AdminConsole session={session} />}
       </main>
     </div>
@@ -1594,6 +1594,8 @@ function Exports({ session, dateFrom, dateTo, completeCostsOnly }: { session: Se
 }
 
 function SettingsPage({ session, onSession, onDeleted }: { session: Session; onSession: (session: Session) => void; onDeleted: () => void }) {
+  const { t, locale } = useI18n();
+  const localeCode = locale === "kk" ? "kk-KZ" : "ru-RU";
   const [telegram, setTelegram] = useState<any>(null),
     [link, setLink] = useState<any>(null),
     [message, setMessage] = useState(""),
@@ -1602,6 +1604,8 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
     [invitationLink, setInvitationLink] = useState(""),
     [deleting, setDeleting] = useState(false);
   const headers = { "X-Organization-Id": session.organizationId };
+  const canManage = session.role === "Owner" || session.role === "Admin";
+  const canWrite = session.role !== "Viewer";
   const load = () =>
     fetch("/api/v1/telegram", { headers })
       .then((r) => r.json())
@@ -1620,20 +1624,20 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
   }, []);
   const inviteMember = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();const formElement=event.currentTarget;const form=new FormData(formElement);const response=await fetch(`/api/v1/organizations/${session.organizationId}/members`,{method:"POST",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({email:form.get("email"),role:form.get("role")})});const data=await response.json().catch(()=>null);
-    if(response.ok){setMessage(data.delivered?"Приглашение отправлено по email":"Приглашение создано — передайте ссылку пользователю");setInvitationLink(data.invitationUrl);formElement.reset();loadMembers();}else setMessage(data?.title||data?.detail||"Не удалось создать приглашение");
+    if(response.ok){setMessage(data.delivered?t("settings.inviteDelivered"):t("settings.inviteCreated"));setInvitationLink(data.invitationUrl);formElement.reset();loadMembers();}else setMessage(data?.title||data?.detail||t("settings.inviteError"));
   };
-  const changeMemberRole = async (userId:string,role:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}/role`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({role})});setMessage(response.ok?"Роль изменена":"Не удалось изменить роль");if(response.ok)loadMembers();};
-  const removeMember = async (userId:string) => {if(!window.confirm("Удалить пользователя из организации?"))return;const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}`,{method:"DELETE",headers});setMessage(response.ok?"Участник удалён":"Не удалось удалить участника");if(response.ok)loadMembers();};
-  const cancelInvitation = async (id:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/invitations/${id}`,{method:"DELETE",headers});setMessage(response.ok?"Приглашение отменено":"Не удалось отменить приглашение");if(response.ok)loadMembers();};
+  const changeMemberRole = async (userId:string,role:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}/role`,{method:"PUT",headers:{...headers,"Content-Type":"application/json"},body:JSON.stringify({role})});setMessage(response.ok?t("settings.roleChanged"):t("settings.roleError"));if(response.ok)loadMembers();};
+  const removeMember = async (userId:string) => {if(!window.confirm(t("settings.removeConfirm")))return;const response=await fetch(`/api/v1/organizations/${session.organizationId}/members/${userId}`,{method:"DELETE",headers});setMessage(response.ok?t("settings.memberRemoved"):t("settings.memberRemoveError"));if(response.ok)loadMembers();};
+  const cancelInvitation = async (id:string) => {const response=await fetch(`/api/v1/organizations/${session.organizationId}/invitations/${id}`,{method:"DELETE",headers});setMessage(response.ok?t("settings.inviteCancelled"):t("settings.inviteCancelError"));if(response.ok)loadMembers();};
   const startLink = async () => {
     const r = await fetch("/api/v1/telegram/link", { method: "POST", headers });
     const data = await r.json();
     if (r.ok) setLink(data);
-    else setMessage(data.detail || "Telegram bot пока не настроен");
+    else setMessage(data.detail || t("settings.telegramUnavailable"));
   };
   const test = async () => {
     const r = await fetch("/api/v1/telegram/test", { method: "POST", headers });
-    setMessage(r.ok ? "Тест отправлен" : "Не удалось отправить тест");
+    setMessage(r.ok ? t("settings.testSent") : t("settings.testError"));
   };
   const toggle = async (type: string, enabled: boolean) => {
     await fetch(`/api/v1/telegram/rules/${type}`, {
@@ -1665,14 +1669,14 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
         currency: data.currency,
         allocateOrganizationExpenses: data.allocateOrganizationExpenses,
       });
-      setMessage("Настройки организации сохранены");
-    } else setMessage(data?.title || "Не удалось сохранить настройки");
+      setMessage(t("settings.saved"));
+    } else setMessage(data?.title || t("settings.saveError"));
   };
   const deleteOrganization = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     if (f.get("organizationName") !== session.organizationName) {
-      setMessage("Введите точное название организации");
+      setMessage(t("settings.exactName"));
       return;
     }
     setDeleting(true);
@@ -1686,33 +1690,34 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
     });
     const data = await r.json().catch(() => null);
     if (r.ok) onDeleted();
-    else setMessage(data?.title || data?.detail || "Удаление не выполнено");
+    else setMessage(data?.title || data?.detail || t("settings.deleteError"));
     setDeleting(false);
   };
   const rule = (type: string) => telegram?.rules?.find((x: any) => x.eventType === type)?.enabled ?? false;
-  const canManage = session.role === "Owner" || session.role === "Admin";
+  const roleLabel = (role:string) => ({Owner:t("settings.roleOwner"),Admin:t("settings.roleAdmin"),Analyst:t("settings.roleAnalyst"),Viewer:t("settings.roleViewer")}[role] || role);
+  const telegramStatus = (status?:string) => status === "Active" ? t("settings.telegramActive") : status === "Pending" ? t("settings.telegramPending") : status === "NotLinked" ? t("settings.telegramNotLinked") : t("settings.checking");
   return (
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">ОРГАНИЗАЦИЯ</span>
-          <h1>Настройки</h1>
+          <span className="eyebrow">{t("settings.eyebrow")}</span>
+          <h1>{t("settings.title")}</h1>
           <p>
-            {session.organizationName} · тариф {session.plan}
+            {session.organizationName} · {t("settings.planWord")} {session.plan}
           </p>
         </div>
       </div>
       {message && <p className="integration-message">{message}</p>}
       <div className="settings-grid">
         <article className="entry-card">
-          <h2>Организация</h2>
+          <h2>{t("settings.organization")}</h2>
           <form className="settings-form" onSubmit={saveOrganization}>
             <label>
-              Название
+              {t("settings.name")}
               <input name="name" defaultValue={session.organizationName} minLength={2} maxLength={120} required disabled={!canManage} />
             </label>
             <label>
-              Часовой пояс
+              {t("settings.timeZone")}
               <select name="timeZone" defaultValue={session.timeZone || "Asia/Almaty"} disabled={!canManage}>
                 <option value="Asia/Almaty">Asia/Almaty</option>
                 <option value="Asia/Qyzylorda">Asia/Qyzylorda</option>
@@ -1723,86 +1728,87 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
               </select>
             </label>
             <label>
-              Валюта
+              {t("settings.currency")}
               <input value="KZT" disabled />
             </label>
             <label className="allocation-setting">
               <input name="allocateOrganizationExpenses" type="checkbox" defaultChecked={session.allocateOrganizationExpenses} disabled={!canManage} />
-              Распределять общеорганизационные расходы по выручке товаров
-              <small>Общий результат не изменится. Настройка влияет только на прибыльность товаров и ABC.</small>
+              {t("settings.allocate")}
+              <small>{t("settings.allocateHint")}</small>
             </label>
-            {canManage && <button className="primary">Сохранить</button>}
+            {canManage && <button className="primary">{t("settings.save")}</button>}
           </form>
         </article>
         <article className="entry-card">
-          <h2>Тариф</h2>
+          <h2>{t("settings.plan")}</h2>
           <b className="plan-name">{session.plan}</b>
-          <p>Trial: 2 пользователя · Start: 3 · Pro: 10 · Business: 30.</p>
-          {session.trialEndsAt && <small>Trial до {new Date(session.trialEndsAt).toLocaleDateString("ru-RU")}</small>}
+          <p>{t("settings.planLimits")}</p>
+          {session.trialEndsAt && <small>{t("settings.trialUntil")} {new Date(session.trialEndsAt).toLocaleDateString(localeCode)}</small>}
         </article>
         <article className="entry-card">
-          <h2>Telegram</h2>
+          <h2>{t("settings.telegram")}</h2>
           <p>
-            Статус: <b>{telegram?.status || "Проверяем…"}</b>
+            {t("settings.status")}: <b>{telegramStatus(telegram?.status)}</b>
           </p>
           {telegram?.status === "Active" ? (
-            <button className="primary" onClick={test}>
-              Отправить тест
+            <button className="primary" onClick={test} disabled={!canWrite}>
+              {t("settings.sendTest")}
             </button>
           ) : (
-            <button className="primary" onClick={startLink}>
-              Связать Telegram
+            <button className="primary" onClick={startLink} disabled={!canManage}>
+              {t("settings.linkTelegram")}
             </button>
           )}
+          {!canManage && telegram?.status !== "Active" && <small>{t("settings.manageRequired")}</small>}
           {link && (
             <div className="telegram-link">
               <p>
-                Код действует 15 минут: <b>{link.code}</b>
+                {t("settings.codeValid")}: <b>{link.code}</b>
               </p>
               {link.deepLink && (
                 <a className="primary" href={link.deepLink} target="_blank" rel="noreferrer">
-                  Открыть Telegram
+                  {t("settings.openTelegram")}
                 </a>
               )}
             </div>
           )}
         </article>
         <article className="entry-card notification-rules">
-          <h2>Правила уведомлений</h2>
+          <h2>{t("settings.notificationRules")}</h2>
           {[
-            ["MissingCost", "Нет себестоимости"],
-            ["NegativeMargin", "Отрицательная маржа"],
-            ["SyncRequiresAttention", "Ошибка синхронизации"],
+            ["MissingCost", t("settings.missingCost")],
+            ["NegativeMargin", t("settings.negativeMargin")],
+            ["SyncRequiresAttention", t("settings.syncError")],
           ].map(([type, label]) => (
             <label key={type}>
-              <input type="checkbox" checked={rule(type)} onChange={(e) => toggle(type, e.target.checked)} />
+              <input type="checkbox" checked={rule(type)} disabled={!canWrite} onChange={(e) => toggle(type, e.target.checked)} />
               {label}
             </label>
           ))}
         </article>
       </div>
       <article className="entry-card members-card">
-        <h2>Пользователи и роли</h2>
+        <h2>{t("settings.members")}</h2>
         <div className="member-list">
-          {members.map((member:any)=><div className="member-row" key={member.id}><div><b>{member.displayName||member.email}</b><small>{member.email}</small></div><select value={member.role} disabled={!canManage||member.role==="Owner"} onChange={event=>changeMemberRole(member.id,event.target.value)}><option value="Owner">Owner</option><option value="Admin">Admin</option><option value="Analyst">Analyst</option><option value="Viewer">Viewer</option></select>{canManage&&member.role!=="Owner"&&<button className="text-danger" onClick={()=>removeMember(member.id)}>Удалить</button>}</div>)}
+          {members.map((member:any)=><div className="member-row" key={member.id}><div><b>{member.displayName||member.email}</b><small>{member.email}</small></div><select value={member.role} disabled={!canManage||member.role==="Owner"} onChange={event=>changeMemberRole(member.id,event.target.value)}><option value="Owner">{roleLabel("Owner")}</option><option value="Admin">{roleLabel("Admin")}</option><option value="Analyst">{roleLabel("Analyst")}</option><option value="Viewer">{roleLabel("Viewer")}</option></select>{canManage&&member.role!=="Owner"&&<button className="text-danger" onClick={()=>removeMember(member.id)}>{t("settings.remove")}</button>}</div>)}
         </div>
-        {canManage&&<><form className="member-invite-form" onSubmit={inviteMember}><input name="email" type="email" placeholder="user@example.com" required/><select name="role" defaultValue="Analyst"><option value="Admin">Admin</option><option value="Analyst">Analyst</option><option value="Viewer">Viewer</option></select><button className="primary">Пригласить</button></form>{invitationLink&&<label className="invitation-link">Ссылка приглашения<input readOnly value={invitationLink} onFocus={event=>event.currentTarget.select()}/></label>}{invitations.map((invitation:any)=><div className="pending-invitation" key={invitation.id}><span>{invitation.email} · {invitation.role} · до {new Date(invitation.expiresAt).toLocaleDateString("ru-RU")}</span><button className="text-danger" onClick={()=>cancelInvitation(invitation.id)}>Отменить</button></div>)}</>}
+        {canManage&&<><form className="member-invite-form" onSubmit={inviteMember}><input name="email" type="email" placeholder="user@example.com" required/><select name="role" defaultValue="Analyst"><option value="Admin">{roleLabel("Admin")}</option><option value="Analyst">{roleLabel("Analyst")}</option><option value="Viewer">{roleLabel("Viewer")}</option></select><button className="primary">{t("settings.invite")}</button></form>{invitationLink&&<label className="invitation-link">{t("settings.inviteLink")}<input readOnly value={invitationLink} onFocus={event=>event.currentTarget.select()}/></label>}{invitations.map((invitation:any)=><div className="pending-invitation" key={invitation.id}><span>{invitation.email} · {roleLabel(invitation.role)} · {t("settings.until")} {new Date(invitation.expiresAt).toLocaleDateString(localeCode)}</span><button className="text-danger" onClick={()=>cancelInvitation(invitation.id)}>{t("settings.cancel")}</button></div>)}</>}
       </article>
       {session.role === "Owner" && (
         <article className="entry-card danger-zone">
-          <h2>Удаление организации</h2>
-          <p>Будут безвозвратно удалены заказы, товары, расходы, выгрузки, интеграции и участники. Если это ваша единственная организация, аккаунт также будет удалён.</p>
+          <h2>{t("settings.deleteOrganization")}</h2>
+          <p>{t("settings.deleteWarning")}</p>
           <form className="settings-form" onSubmit={deleteOrganization}>
             <label>
-              Введите «{session.organizationName}»
+              {t("settings.enterNamePrefix")}{session.organizationName}{t("settings.enterNameSuffix")}
               <input name="organizationName" required autoComplete="off" />
             </label>
             <label>
-              Текущий пароль
+              {t("settings.currentPassword")}
               <input name="password" type="password" required autoComplete="current-password" />
             </label>
             <button className="danger-button" disabled={deleting}>
-              {deleting ? "Удаляем…" : "Удалить организацию и данные"}
+              {deleting ? t("settings.deleting") : t("settings.deleteAction")}
             </button>
           </form>
         </article>
