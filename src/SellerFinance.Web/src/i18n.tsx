@@ -1,6 +1,16 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 
+const ordersRu={
+  "orders.eyebrow":"ПРОДАЖИ","orders.title":"Заказы","orders.lead":"Фильтры и подробная декомпозиция финансового результата.","orders.search":"Поиск заказа","orders.number":"Номер заказа","orders.status":"Статус","orders.allStatuses":"Все статусы","orders.pending":"В обработке","orders.dateFrom":"Заказы с даты","orders.dateTo":"Заказы по дату","orders.from":"С","orders.to":"По","orders.product":"Товар","orders.allProducts":"Все товары","orders.profitFrom":"Прибыль от","orders.profitTo":"Прибыль до","orders.loading":"Загрузка…","orders.apply":"Применить","orders.order":"Заказ","orders.date":"Дата","orders.amount":"Сумма","orders.fee":"Комиссия","orders.delivery":"Доставка","orders.profit":"Прибыль","orders.calculation":"Расчёт","orders.complete":"Полный","orders.needsCost":"Нужна себестоимость","orders.empty":"По заданным фильтрам заказов нет.","orders.found":"Найдено","orders.code":"Код","orders.payment":"Оплата","orders.unspecified":"не указана","orders.completed":"Завершён","orders.dateMissing":"дата отсутствует","orders.fallback":"Дата завершения отсутствует — расчёт выполнен по дате создания.","orders.returnRequested":"Запрошен возврат доставки — заказ ещё не считается окончательно возвращённым.","orders.revenue":"Выручка","orders.fees":"Комиссии","orders.variableCosts":"Прочие переменные расходы","orders.operatingProfit":"Операционная прибыль","orders.margin":"Маржа","orders.statusHistory":"История статусов","orders.historyEmpty":"История появится после следующей синхронизации.","orders.lines":"Товарные строки","orders.quantity":"Количество","orders.unitCost":"Себестоимость единицы"
+  ,"orders.skuUnmapped":"SKU не сопоставлен","orders.pieces":"шт.","orders.lineRevenue":"выручка","orders.lineCost":"себестоимость","orders.lineFee":"комиссия","orders.lineDelivery":"доставка","orders.lineOther":"прочие"
+} as const;
+const ordersKk:Record<keyof typeof ordersRu,string>={
+  "orders.eyebrow":"САТЫЛЫМДАР","orders.title":"Тапсырыстар","orders.lead":"Қаржылық нәтижені сүзу және толық жіктеу.","orders.search":"Тапсырысты іздеу","orders.number":"Тапсырыс нөмірі","orders.status":"Күйі","orders.allStatuses":"Барлық күйлер","orders.pending":"Өңделуде","orders.dateFrom":"Бастапқы күн","orders.dateTo":"Соңғы күн","orders.from":"Бастап","orders.to":"Дейін","orders.product":"Тауар","orders.allProducts":"Барлық тауарлар","orders.profitFrom":"Пайда бастап","orders.profitTo":"Пайда дейін","orders.loading":"Жүктелуде…","orders.apply":"Қолдану","orders.order":"Тапсырыс","orders.date":"Күні","orders.amount":"Сома","orders.fee":"Комиссия","orders.delivery":"Жеткізу","orders.profit":"Пайда","orders.calculation":"Есеп","orders.complete":"Толық","orders.needsCost":"Өзіндік құн қажет","orders.empty":"Берілген сүзгілер бойынша тапсырыс жоқ.","orders.found":"Табылды","orders.code":"Код","orders.payment":"Төлем","orders.unspecified":"көрсетілмеген","orders.completed":"Аяқталды","orders.dateMissing":"күні жоқ","orders.fallback":"Аяқталу күні жоқ — есеп құру күні бойынша орындалды.","orders.returnRequested":"Жеткізуді қайтару сұралды — тапсырыс әлі толық қайтарылған жоқ.","orders.revenue":"Түсім","orders.fees":"Комиссиялар","orders.variableCosts":"Басқа айнымалы шығындар","orders.operatingProfit":"Операциялық пайда","orders.margin":"Маржа","orders.statusHistory":"Күйлер тарихы","orders.historyEmpty":"Тарих келесі синхрондаудан кейін пайда болады.","orders.lines":"Тауар жолдары","orders.quantity":"Саны","orders.unitCost":"Бірлік өзіндік құны"
+  ,"orders.skuUnmapped":"SKU сәйкестендірілмеген","orders.pieces":"дана","orders.lineRevenue":"түсім","orders.lineCost":"өзіндік құн","orders.lineFee":"комиссия","orders.lineDelivery":"жеткізу","orders.lineOther":"басқа"
+};
+
 export const ru = {
+  ...ordersRu,
   "brand.name": "Seller Finance",
   "common.wait": "Подождите…",
   "common.logout": "выйти",
@@ -61,6 +71,7 @@ export const ru = {
 
 export type TranslationKey=keyof typeof ru;
 const kk:Record<TranslationKey,string>={
+  ...ordersKk,
   "brand.name":"Seller Finance","common.wait":"Күте тұрыңыз…","common.logout":"шығу","common.create":"Құру",
   "auth.login.title":"Кіру","auth.login.lead":"Пайда мен өзіндік құнды бір жерден басқарыңыз.","auth.login.submit":"Кіру",
   "auth.register.title":"Тіркелгі ашу","auth.register.lead":"Сатушының қорғалған жұмыс кеңістігін құрыңыз.","auth.register.submit":"Тіркелу","auth.register.name":"Атыңыз","auth.register.organization":"Ұйым атауы",

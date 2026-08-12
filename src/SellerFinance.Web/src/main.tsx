@@ -687,6 +687,7 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
 }
 
 function OrdersPage({ initialOrders, session, products, initialDateFrom, initialDateTo }: { initialOrders: Order[]; session: Session; products: Product[]; initialDateFrom?: string; initialDateTo?: string }) {
+  const {t,locale}=useI18n();const localeCode=locale==="kk"?"kk-KZ":"ru-RU";
   const [orders, setOrders] = useState(initialOrders),
     [detail, setDetail] = useState<any>(null),
     [status, setStatus] = useState(""),
@@ -738,34 +739,34 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">ПРОДАЖИ</span>
-          <h1>Заказы</h1>
-          <p>Фильтры и подробная декомпозиция финансового результата.</p>
+          <span className="eyebrow">{t("orders.eyebrow")}</span>
+          <h1>{t("orders.title")}</h1>
+          <p>{t("orders.lead")}</p>
         </div>
       </div>
       <form className="order-filters" onSubmit={apply}>
-        <input aria-label="Поиск заказа" placeholder="Номер заказа" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select aria-label="Статус" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">Все статусы</option>
+        <input aria-label={t("orders.search")} placeholder={t("orders.number")} value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select aria-label={t("orders.status")} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">{t("orders.allStatuses")}</option>
           <option value="COMPLETED">Completed</option>
           <option value="RETURNED">Returned</option>
           <option value="CANCELLED">Cancelled</option>
-          <option value="PENDING">В обработке</option>
+          <option value="PENDING">{t("orders.pending")}</option>
         </select>
-        <label className="order-date">С<input aria-label="Заказы с даты" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
-        <label className="order-date">По<input aria-label="Заказы по дату" type="date" min={dateFrom} value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
-        <select aria-label="Товар" value={productId} onChange={(e) => setProductId(e.target.value)}>
-          <option value="">Все товары</option>
+        <label className="order-date">{t("orders.from")}<input aria-label={t("orders.dateFrom")} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
+        <label className="order-date">{t("orders.to")}<input aria-label={t("orders.dateTo")} type="date" min={dateFrom} value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
+        <select aria-label={t("orders.product")} value={productId} onChange={(e) => setProductId(e.target.value)}>
+          <option value="">{t("orders.allProducts")}</option>
           {products.map((p) => (
             <option key={p.id} value={p.id}>
               {p.sku}
             </option>
           ))}
         </select>
-        <input aria-label="Прибыль от" type="number" placeholder="Прибыль от" value={profitFrom} onChange={(e) => setProfitFrom(e.target.value)} />
-        <input aria-label="Прибыль до" type="number" placeholder="Прибыль до" value={profitTo} onChange={(e) => setProfitTo(e.target.value)} />
+        <input aria-label={t("orders.profitFrom")} type="number" placeholder={t("orders.profitFrom")} value={profitFrom} onChange={(e) => setProfitFrom(e.target.value)} />
+        <input aria-label={t("orders.profitTo")} type="number" placeholder={t("orders.profitTo")} value={profitTo} onChange={(e) => setProfitTo(e.target.value)} />
         <button className="primary" disabled={busy}>
-          {busy ? "Загрузка…" : "Применить"}
+          {busy ? t("orders.loading") : t("orders.apply")}
         </button>
       </form>
       <article className="table-card standalone">
@@ -773,37 +774,30 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
           <table>
             <thead>
               <tr>
-                <th>Заказ</th>
-                <th>Дата</th>
-                <th>Статус</th>
-                <th>Сумма</th>
-                <th>Комиссия</th>
-                <th>Доставка</th>
-                <th>Прибыль</th>
-                <th>Расчёт</th>
+                <th>{t("orders.order")}</th><th>{t("orders.date")}</th><th>{t("orders.status")}</th><th>{t("orders.amount")}</th><th>{t("orders.fee")}</th><th>{t("orders.delivery")}</th><th>{t("orders.profit")}</th><th>{t("orders.calculation")}</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((o) => (
                 <tr key={o.id} onClick={() => open(o.id)}>
                   <td>{o.externalId || o.id}</td>
-                  <td>{new Date(o.date).toLocaleDateString("ru-RU")}</td>
+                  <td>{new Date(o.date).toLocaleDateString(localeCode)}</td>
                   <td>{o.status}</td>
                   <td>{money(o.amount)}</td>
                   <td>{money(o.fees ?? 0)}</td>
                   <td>{money(o.delivery ?? 0)}</td>
                   <td>{money(o.profit ?? null)}</td>
                   <td>
-                    <span className={o.complete ? "pill" : "pill missing"}>{o.complete ? "Полный" : "Нужна себестоимость"}</span>
+                    <span className={o.complete ? "pill" : "pill missing"}>{o.complete ? t("orders.complete") : t("orders.needsCost")}</span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {orders.length === 0 && <div className="empty-row">По заданным фильтрам заказов нет.</div>}
+          {orders.length === 0 && <div className="empty-row">{t("orders.empty")}</div>}
         </div>
         <div className="pagination">
-          <span>Найдено: {total}</span>
+          <span>{t("orders.found")}: {total}</span>
           <button disabled={page <= 1 || busy} onClick={() => load(page - 1)}>
             ←
           </button>
@@ -821,18 +815,18 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
             <button className="modal-close" onClick={() => setDetail(null)}>
               <X />
             </button>
-            <span className="eyebrow">ЗАКАЗ {detail.externalId}</span>
+            <span className="eyebrow">{t("orders.order").toUpperCase()} {detail.externalId}</span>
             <h2>
               {money(detail.revenue)} · {detail.status}
             </h2>
             <p className="fallback-note">
-              Код: {detail.code || detail.externalId} · Оплата: {detail.paymentMode || "не указана"} · Завершён: {detail.completionDate ? new Date(detail.completionDate).toLocaleDateString("ru-RU") : "дата отсутствует"}
+              {t("orders.code")}: {detail.code || detail.externalId} · {t("orders.payment")}: {detail.paymentMode || t("orders.unspecified")} · {t("orders.completed")}: {detail.completionDate ? new Date(detail.completionDate).toLocaleDateString(localeCode) : t("orders.dateMissing")}
             </p>
-            {detail.calculationDateFallback && <p className="fallback-note">Дата завершения отсутствует — расчёт выполнен по дате создания.</p>}
-            {detail.statusHistory?.[0]?.externalStatus === "KASPI_DELIVERY_RETURN_REQUESTED" && <p className="fallback-note">Запрошен возврат доставки — заказ ещё не считается окончательно возвращённым.</p>}
+            {detail.calculationDateFallback && <p className="fallback-note">{t("orders.fallback")}</p>}
+            {detail.statusHistory?.[0]?.externalStatus === "KASPI_DELIVERY_RETURN_REQUESTED" && <p className="fallback-note">{t("orders.returnRequested")}</p>}
             <div className="breakdown">
               <div>
-                <span>Выручка</span>
+                <span>{t("orders.revenue")}</span>
                 <b>{money(detail.revenue)}</b>
               </div>
               <div>
@@ -840,41 +834,41 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
                 <b>{money(detail.cogs)}</b>
               </div>
               <div>
-                <span>Комиссии</span>
+                <span>{t("orders.fees")}</span>
                 <b>{money(detail.marketplaceFees)}</b>
               </div>
               <div>
-                <span>Доставка</span>
+                <span>{t("orders.delivery")}</span>
                 <b>{money(detail.delivery)}</b>
               </div>
               <div>
-                <span>Прочие переменные расходы</span>
+                <span>{t("orders.variableCosts")}</span>
                 <b>{money((detail.variableCosts ?? 0) - (detail.marketplaceFees ?? 0) - (detail.delivery ?? 0))}</b>
               </div>
               <div>
-                <span>Операционная прибыль</span>
+                <span>{t("orders.operatingProfit")}</span>
                 <b>{money(detail.operatingProfit)}</b>
               </div>
-              <div><span>Маржа</span><b>{pct(detail.operatingMarginPct)}</b></div>
+              <div><span>{t("orders.margin")}</span><b>{pct(detail.operatingMarginPct)}</b></div>
               <div><span>Coverage</span><b>{pct(detail.coveragePct)}</b></div>
             </div>
-            <h3>История статусов</h3>
+            <h3>{t("orders.statusHistory")}</h3>
             <div className="status-history">
-              {detail.statusHistory?.length ? detail.statusHistory.map((item:any,index:number)=><div key={`${item.changedAt}-${index}`}><b>{item.externalStatus || item.status}</b><span>{new Date(item.changedAt).toLocaleString("ru-RU")}</span></div>) : <p className="muted">История появится после следующей синхронизации.</p>}
+              {detail.statusHistory?.length ? detail.statusHistory.map((item:any,index:number)=><div key={`${item.changedAt}-${index}`}><b>{item.externalStatus || item.status}</b><span>{new Date(item.changedAt).toLocaleString(localeCode)}</span></div>) : <p className="muted">{t("orders.historyEmpty")}</p>}
             </div>
-            <h3>Товарные строки</h3>
+            <h3>{t("orders.lines")}</h3>
             {detail.lines?.map((l: any) => (
               <div className="order-line" key={l.id}>
                 <div>
                   <b>{l.name || l.productId}</b>
                   <span>
-                    {l.sku || "SKU не сопоставлен"} · {l.quantity} шт.
+                    {l.sku || t("orders.skuUnmapped")} · {l.quantity} {t("orders.pieces")}
                   </span>
                 </div>
                 <div>
                   <b>{money(l.profit)}</b>
                   <span>
-                    выручка {money(l.revenue)} · себестоимость {l.unitCost === null ? "не указана" : `${money(l.unitCost)} × ${l.quantity}`} · комиссия {money(l.fee)} · доставка {money(l.delivery)} · прочие {money(l.otherVariableCosts)}
+                    {t("orders.lineRevenue")} {money(l.revenue)} · {t("orders.lineCost")} {l.unitCost === null ? t("orders.unspecified") : `${money(l.unitCost)} × ${l.quantity}`} · {t("orders.lineFee")} {money(l.fee)} · {t("orders.lineDelivery")} {money(l.delivery)} · {t("orders.lineOther")} {money(l.otherVariableCosts)}
                   </span>
                 </div>
               </div>
