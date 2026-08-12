@@ -48,18 +48,53 @@ else
 }
 
 var api = app.MapGroup("/api/v1");
-api.MapGet("/session", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Session) : Results.NotFound());
-api.MapGet("/analytics/summary", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Summary()) : Results.NotFound());
-api.MapGet("/analytics/timeseries", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.TimeSeries) : Results.NotFound());
-api.MapGet("/analytics/products", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Products) : Results.NotFound());
+api.MapGet("/session", async (HttpContext ctx, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    var organization = db is null ? null : await db.Organizations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == ctx.Tenant());
+    return Results.Ok(new { organizationId=ctx.Tenant(), organizationName=organization?.Name ?? "Aspan Market", userName="Алия", role="Owner", plan="Pro" });
+});
+api.MapGet("/analytics/summary", async (HttpContext ctx, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    return Results.Ok(db is null ? store.Summary() : await DbAnalytics.SummaryAsync(db, ctx.Tenant()));
+});
+api.MapGet("/analytics/timeseries", async (HttpContext ctx, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    return Results.Ok(db is null ? store.TimeSeries : await DbAnalytics.TimeSeriesAsync(db, ctx.Tenant()));
+});
+api.MapGet("/analytics/products", async (HttpContext ctx, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    return Results.Ok(db is null ? store.Products : await DbAnalytics.ProductsAsync(db, ctx.Tenant()));
+});
 api.MapGet("/analytics/abc", (HttpContext ctx, DemoStore store) =>
     store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Abc()) : Results.NotFound());
-api.MapGet("/orders", (HttpContext ctx, DemoStore store) =>
-    store.HasTenant(ctx.Tenant()) ? Results.Ok(store.Orders) : Results.NotFound());
+api.MapGet("/orders", async (HttpContext ctx, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    return Results.Ok(db is null ? store.Orders : await DbAnalytics.OrdersAsync(db, ctx.Tenant()));
+});
+api.MapPost("/products/{id}/costs", async (HttpContext ctx, string id, ProductCostRequest request, DemoStore store) =>
+{
+    if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
+    if (request.Cost <= 0) return Results.BadRequest(new { title="Себестоимость должна быть больше нуля" });
+    var db = ctx.RequestServices.GetService<SellerFinanceDbContext>();
+    if (db is null) return Results.Problem("PostgreSQL не настроен", statusCode: 503);
+    var product = await db.Products.SingleOrDefaultAsync(x => x.Id == id && x.OrganizationId == ctx.Tenant());
+    if (product is null) return Results.NotFound();
+    product.CurrentCost = request.Cost;
+    var affectedLines = await db.OrderLines.Where(x => x.ProductId == id && x.UnitCost == null).ToListAsync();
+    foreach (var line in affectedLines) line.UnitCost = request.Cost;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { productId=id, cost=request.Cost, updatedOrderLines=affectedLines.Count });
+});
 api.MapPost("/integrations/kaspi/verify", (HttpContext ctx, KaspiTokenRequest request, DemoStore store) =>
 {
     if (!store.HasTenant(ctx.Tenant())) return Results.NotFound();
@@ -77,6 +112,7 @@ app.MapFallbackToFile("index.html");
 app.Run();
 
 record KaspiTokenRequest(string Token);
+record ProductCostRequest(decimal Cost, DateOnly? EffectiveFrom);
 
 static class TenantContext
 {

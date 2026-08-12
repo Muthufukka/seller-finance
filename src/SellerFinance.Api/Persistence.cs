@@ -134,3 +134,44 @@ public static class DatabaseSeed
             Lines=[new() { Id=Guid.NewGuid(), OrderId=id, ProductId=productId, Revenue=revenue, Quantity=quantity, UnitCost=cost, ActualFee=actualFee, FeeRate=feeRate, Delivery=delivery }]
         };
 }
+
+public static class DbAnalytics
+{
+    public static async Task<object> SummaryAsync(SellerFinanceDbContext db, string tenant)
+    {
+        var facts = await FactsAsync(db, tenant);
+        var result = FinanceCalculator.Calculate(facts, 12500m);
+        return new { result.Revenue, orders=facts.Count(x=>x.Status==OrderStatus.Completed), units=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).Sum(x=>x.Quantity), result.Cogs, result.GrossProfit, result.MarketplaceFees, result.Delivery, result.OperatingProfit, result.OperatingMarginPct, result.CoveragePct, result.IsPreliminary };
+    }
+
+    public static async Task<object[]> TimeSeriesAsync(SellerFinanceDbContext db, string tenant) =>
+        (await FactsAsync(db, tenant)).Where(x=>x.Status==OrderStatus.Completed).GroupBy(x=>x.Date)
+            .Select(g=>{var f=FinanceCalculator.Calculate(g); return (object)new { date=g.Key, revenue=f.Revenue, profit=f.OperatingProfit };}).ToArray();
+
+    public static async Task<object[]> OrdersAsync(SellerFinanceDbContext db, string tenant) =>
+        (await FactsAsync(db, tenant)).Select(x=>(object)new { id=x.Id, date=x.Date, status=x.Status.ToString().ToUpperInvariant(), amount=x.Lines.Sum(y=>y.Revenue), items=x.Lines.Sum(y=>y.Quantity), complete=x.Lines.All(y=>y.UnitCost.HasValue) }).ToArray();
+
+    public static async Task<object[]> ProductsAsync(SellerFinanceDbContext db, string tenant)
+    {
+        var products = await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();
+        var facts = await FactsAsync(db, tenant);
+        var lines = facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).ToArray();
+        return products.Select(p=>
+        {
+            var own=lines.Where(x=>x.ProductId==p.Id).ToArray();
+            var revenue=own.Sum(x=>x.Revenue);
+            var complete=own.All(x=>x.UnitCost.HasValue);
+            var cogs=complete ? own.Sum(x=>x.UnitCost!.Value*x.Quantity) : (decimal?)null;
+            var costs=own.Sum(x=>(x.ActualFee ?? Decimal.Round(x.Revenue*x.FeeRate,4))+x.Delivery+x.OtherVariableCosts);
+            var profit=cogs.HasValue ? revenue-cogs.Value-costs : (decimal?)null;
+            var margin=profit.HasValue&&revenue!=0 ? Decimal.Round(profit.Value/revenue*100m,1) : (decimal?)null;
+            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=p.CurrentCost, status=p.CurrentCost.HasValue?"profitable":"missing-cost" };
+        }).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant)
+    {
+        var orders=await db.Orders.AsNoTracking().Include(x=>x.Lines).Where(x=>x.OrganizationId==tenant).ToArrayAsync();
+        return orders.Select(x=>new OrderFact(x.Id,x.OrganizationId,x.Status,x.Date,x.Lines.Select(y=>new OrderLine(y.ProductId,y.Revenue,y.Quantity,y.UnitCost,y.ActualFee,y.FeeRate,y.Delivery,y.OtherVariableCosts)).ToArray())).ToArray();
+    }
+}
