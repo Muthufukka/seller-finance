@@ -262,7 +262,7 @@ function App() {
         {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} openProductId={focusedProductId} />}
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} initialDateFrom={activeRange?.from} initialDateTo={activeRange?.to} />}
         {page === "abc" && <Abc session={session} completeCostsOnly={completeCostsOnly} dateFrom={activeRange?.from} dateTo={activeRange?.to} />}
-        {page === "integrations" && <KaspiConnections session={session} />}
+        {page === "integrations" && <KaspiConnections key={session.organizationId} session={session} />}
         {page === "expenses" && <Expenses session={session} products={products} orders={orders} />}
         {page === "fees" && <Fees session={session} products={products} />}
         {page === "exports" && <Exports key={session.organizationId} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} completeCostsOnly={completeCostsOnly} />}
