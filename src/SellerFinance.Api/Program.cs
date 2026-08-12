@@ -60,7 +60,7 @@ app.Use(async(context,next)=>{context.Response.Headers["X-Content-Type-Options"]
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
-app.MapGet("/health", () => Results.Ok(new { status="healthy", service="SellerFinance.Api" }));
+app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="healthy", service="SellerFinance.Api", revision=config["RENDER_GIT_COMMIT"]?[..7] }));
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
     ? Results.Ok(new { status="healthy", provider="PostgreSQL" })
     : Results.Problem("Database connection failed", statusCode:503));
