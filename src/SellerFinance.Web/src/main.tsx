@@ -516,6 +516,7 @@ function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: bo
 }
 
 function Dashboard({ summary, products, points, problems, loading, period, onPeriod, customFrom, customTo, onCustomFrom, onCustomTo, completeCostsOnly, onCompleteCostsOnly, onNavigate, onProduct }: { summary: Summary; products: Product[]; points: Point[]; problems: DashboardProblems; loading: boolean; period: string; onPeriod: (value: string) => void; customFrom: string; customTo: string; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void; completeCostsOnly: boolean; onCompleteCostsOnly: (value: boolean) => void; onNavigate:(page:Page)=>void; onProduct:(id:string)=>void }) {
+  const {t,locale}=useI18n();const localeCode=locale==="kk"?"kk-KZ":"ru-RU";
   const [topMode,setTopMode]=useState<"profit"|"loss">("profit");
   const max = Math.max(1, ...points.flatMap((x) => [Math.abs(x.revenue),Math.abs(x.profit)]));
   const topProfit=products.filter(x=>x.profit!==null&&x.profit>0).sort((a,b)=>(b.profit??0)-(a.profit??0)).slice(0,10);
@@ -524,83 +525,82 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">{new Date().toLocaleDateString("ru-RU",{day:"numeric",month:"long",year:"numeric"})}</span>
-          <h1>Финансовый обзор</h1>
-          <p>Главное о продажах и прибыли за выбранный период.</p>
+          <span className="eyebrow">{new Date().toLocaleDateString(localeCode,{day:"numeric",month:"long",year:"numeric"})}</span>
+          <h1>{t("dashboard.title")}</h1>
+          <p>{t("dashboard.lead")}</p>
         </div>
         <div className="actions">
           <button className="secondary" onClick={()=>onNavigate("exports")}>
             <Download />
-            Экспорт
+            {t("nav.exports")}
           </button>
           <button className="primary" onClick={()=>onNavigate("integrations")}>
             <RefreshCw className={loading ? "spin" : ""} />
-            Синхронизировать
+            {t("dashboard.sync")}
           </button>
         </div>
       </div>
       <div className="toolbar">
         <select value={period} onChange={(e) => onPeriod(e.target.value)}>
-          <option value="today">Сегодня</option>
-          <option value="yesterday">Вчера</option>
-          <option value="7">Последние 7 дней</option>
-          <option value="30">Последние 30 дней</option>
-          <option value="90">Последние 90 дней</option>
-          <option value="month">Текущий месяц</option>
-          <option value="previous-month">Предыдущий месяц</option>
-          <option value="custom">Произвольный период</option>
+          <option value="today">{t("dashboard.today")}</option>
+          <option value="yesterday">{t("dashboard.yesterday")}</option>
+          <option value="7">{t("dashboard.days7")}</option>
+          <option value="30">{t("dashboard.days30")}</option>
+          <option value="90">{t("dashboard.days90")}</option>
+          <option value="month">{t("dashboard.currentMonth")}</option>
+          <option value="previous-month">{t("dashboard.previousMonth")}</option>
+          <option value="custom">{t("dashboard.custom")}</option>
         </select>
         {period === "custom" && (
           <div className="custom-period">
-            <input aria-label="Начало периода" type="date" value={customFrom} onChange={(e) => onCustomFrom(e.target.value)} />
+            <input aria-label={t("dashboard.periodFrom")} type="date" value={customFrom} onChange={(e) => onCustomFrom(e.target.value)} />
             <span>—</span>
-            <input aria-label="Конец периода" type="date" min={customFrom} value={customTo} onChange={(e) => onCustomTo(e.target.value)} />
+            <input aria-label={t("dashboard.periodTo")} type="date" min={customFrom} value={customTo} onChange={(e) => onCustomTo(e.target.value)} />
           </div>
         )}
         <label className="complete-cost-filter">
           <input type="checkbox" checked={completeCostsOnly} onChange={(event) => onCompleteCostsOnly(event.target.checked)} />
-          Только продажи с полной себестоимостью
+          {t("dashboard.completeCosts")}
         </label>
         <span className="sync">
-          <i /> Данные загружены из PostgreSQL
+          <i /> {t("dashboard.loaded")}
         </span>
       </div>
       {summary.isPreliminary && (
         <div className="notice">
           <CircleAlert />
           <div>
-            <b>Прибыль предварительная</b>
-            <span>Для {money((summary.revenue * (100 - summary.coveragePct)) / 100)} выручки не указана себестоимость.</span>
+            <b>{t("dashboard.preliminary")}</b>
+            <span>{t("dashboard.missingCostPrefix")} {money((summary.revenue * (100 - summary.coveragePct)) / 100)} {t("dashboard.missingCostSuffix")}</span>
           </div>
-          <button>Заполнить себестоимость</button>
+          <button>{t("dashboard.fillCosts")}</button>
         </div>
       )}
       <div className="kpis">
-        <Kpi label="Выручка" value={money(summary.revenue)} sub={`${summary.orders} заказов`} />
-        <Kpi label="Продано единиц" value={String(summary.units)} />
-        <Kpi label="COGS" value={money(summary.cogs)} sub={summary.isPreliminary?"Неполное покрытие":"Полная себестоимость"} warning={summary.isPreliminary} />
-        <Kpi label="Валовая прибыль" value={money(summary.grossProfit)} sub={summary.isPreliminary?"Предварительно":undefined} warning={summary.isPreliminary} />
-        <Kpi label="Комиссии" value={money(summary.marketplaceFees)} />
-        <Kpi label="Доставка" value={money(summary.delivery)} />
-        <Kpi label="Расходы периода" value={money(summary.operatingExpenses)} sub="Прямые и общеорганизационные" />
-        <Kpi label="Операционная прибыль" value={money(summary.operatingProfit)} sub={summary.isPreliminary?"Предварительно":undefined} warning={summary.isPreliminary} />
-        <Kpi label="Операционная маржа" value={pct(summary.operatingMarginPct)} sub={summary.revenue===0?"Нет выручки":undefined} />
+        <Kpi label={t("dashboard.revenue")} value={money(summary.revenue)} sub={`${summary.orders} ${t("dashboard.orders")}`} />
+        <Kpi label={t("dashboard.units")} value={String(summary.units)} />
+        <Kpi label="COGS" value={money(summary.cogs)} sub={summary.isPreliminary?t("dashboard.incompleteCoverage"):t("dashboard.fullCost")} warning={summary.isPreliminary} />
+        <Kpi label={t("dashboard.grossProfit")} value={money(summary.grossProfit)} sub={summary.isPreliminary?t("dashboard.prelimShort"):undefined} warning={summary.isPreliminary} />
+        <Kpi label={t("dashboard.fees")} value={money(summary.marketplaceFees)} />
+        <Kpi label={t("dashboard.delivery")} value={money(summary.delivery)} />
+        <Kpi label={t("dashboard.periodExpenses")} value={money(summary.operatingExpenses)} sub={t("dashboard.expenseKinds")} />
+        <Kpi label={t("dashboard.operatingProfit")} value={money(summary.operatingProfit)} sub={summary.isPreliminary?t("dashboard.prelimShort"):undefined} warning={summary.isPreliminary} />
+        <Kpi label={t("dashboard.operatingMargin")} value={pct(summary.operatingMarginPct)} sub={summary.revenue===0?t("dashboard.noRevenue"):undefined} />
       </div>
       <div className="grid">
         <article className="chart-card">
           <div className="card-head">
             <div>
-              <h2>Выручка и прибыль</h2>
-              <p>Динамика по дням</p>
+              <h2>{t("dashboard.chartTitle")}</h2><p>{t("dashboard.chartLead")}</p>
             </div>
             <div className="legend">
               <span>
                 <i className="revenue" />
-                Выручка
+                {t("dashboard.revenue")}
               </span>
               <span>
                 <i className="profit" />
-                Прибыль
+                {t("dashboard.profit")}
               </span>
             </div>
           </div>
@@ -612,7 +612,7 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
                   <i className="revenue-bar" style={{ height: `${(p.revenue / max) * 100}%` }} />
                 </div>
                 <small>
-                  {new Date(p.date).toLocaleDateString("ru-RU", {
+                  {new Date(p.date).toLocaleDateString(localeCode, {
                     day: "2-digit",
                     month: "short",
                   })}
@@ -624,8 +624,7 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
         <article className="coverage">
           <div className="card-head">
             <div>
-              <h2>Полнота данных</h2>
-              <p>Покрытие себестоимостью</p>
+              <h2>{t("dashboard.dataCompleteness")}</h2><p>{t("dashboard.costCoverage")}</p>
             </div>
           </div>
           <div
@@ -638,14 +637,14 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
           >
             <div>
               <b>{pct(summary.coveragePct)}</b>
-              <span>выручки</span>
+              <span>{t("dashboard.revenueWord")}</span>
             </div>
           </div>
           <p>
-            <i /> {problems.totalCount} проблем требует внимания
+            <i /> {problems.totalCount} {t("dashboard.problemCountSuffix")}
           </p>
           <button onClick={() => onNavigate("products")}>
-            Проверить товары <span>→</span>
+            {t("dashboard.checkProducts")} <span>→</span>
           </button>
         </article>
       </div>
@@ -653,18 +652,16 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
         <article className="table-card">
           <div className="card-head">
             <div>
-              <h2>{topMode === "profit" ? "TOP-10 по прибыли" : "TOP-10 по убытку"}</h2>
-              <p>За выбранный период</p>
+              <h2>{topMode === "profit" ? t("dashboard.topProfit") : t("dashboard.topLoss")}</h2><p>{t("dashboard.periodSelected")}</p>
             </div>
-            <div className="top-switch"><button className={topMode==="profit"?"active":""} onClick={()=>setTopMode("profit")}>Прибыль</button><button className={topMode==="loss"?"active":""} onClick={()=>setTopMode("loss")}>Убыток</button><button onClick={()=>onNavigate("products")}>Все →</button></div>
+            <div className="top-switch"><button className={topMode==="profit"?"active":""} onClick={()=>setTopMode("profit")}>{t("dashboard.profit")}</button><button className={topMode==="loss"?"active":""} onClick={()=>setTopMode("loss")}>{t("dashboard.loss")}</button><button onClick={()=>onNavigate("products")}>{t("dashboard.all")}</button></div>
           </div>
           <ProductTable products={topMode === "profit" ? topProfit : topLoss} onSelect={(product)=>onProduct(product.id)} />
         </article>
         <article className="problems">
           <div className="card-head">
             <div>
-              <h2>Требует внимания</h2>
-              <p>Что мешает точному расчёту</p>
+              <h2>{t("dashboard.attention")}</h2><p>{t("dashboard.accuracyBlockers")}</p>
             </div>
             <span>{problems.totalCount}</span>
           </div>
@@ -672,17 +669,17 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
             <div className="problem" key={p.id}>
               <PackageSearch />
               <div>
-                <b>Нет себестоимости</b>
+                <b>{t("dashboard.noCost")}</b>
                 <span>
                   {p.name} · {p.sku}
                 </span>
               </div>
-              <button onClick={()=>onProduct(p.id)}>Добавить</button>
+              <button onClick={()=>onProduct(p.id)}>{t("dashboard.add")}</button>
             </div>
           ))}
-          {problems.negativeMargins.map((p) => <div className="problem warning" key={`margin-${p.id}`}><TrendingDown/><div><b>Отрицательная маржа</b><span>{p.name} · {pct(p.margin)} · {money(p.profit)}</span></div><button onClick={()=>onProduct(p.id)}>Открыть</button></div>)}
-          {problems.syncIssues.map((issue) => <div className="problem sync-warning" key={`sync-${issue.id}`}><RefreshCw/><div><b>Ошибка синхронизации</b><span>{issue.storeName} · {issue.errorCode || "Требуется проверка"}</span></div><button onClick={()=>onNavigate("integrations")}>Проверить</button></div>)}
-          {!problems.totalCount&&<p className="no-problems">Проблем за выбранный период нет.</p>}
+          {problems.negativeMargins.map((p) => <div className="problem warning" key={`margin-${p.id}`}><TrendingDown/><div><b>{t("dashboard.negativeMargin")}</b><span>{p.name} · {pct(p.margin)} · {money(p.profit)}</span></div><button onClick={()=>onProduct(p.id)}>{t("dashboard.open")}</button></div>)}
+          {problems.syncIssues.map((issue) => <div className="problem sync-warning" key={`sync-${issue.id}`}><RefreshCw/><div><b>{t("dashboard.syncError")}</b><span>{issue.storeName} · {issue.errorCode || t("dashboard.checkRequired")}</span></div><button onClick={()=>onNavigate("integrations")}>{t("dashboard.check")}</button></div>)}
+          {!problems.totalCount&&<p className="no-problems">{t("dashboard.noProblems")}</p>}
         </article>
       </div>
     </section>
