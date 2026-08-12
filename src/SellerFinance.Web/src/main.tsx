@@ -1160,6 +1160,7 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
 }
 
 function FinancialImporter({ session, type, onApplied }: { session: Session; type: "Expenses" | "ActualFees"; onApplied?: () => void }) {
+  const { t } = useI18n();
   const [preview, setPreview] = useState<any>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1168,7 +1169,7 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
     const file = event.target.files?.[0];
     if (!file) return;
     setBusy(true);
-    setMessage("Проверяем файл…");
+    setMessage(t("financial.checkingFile"));
     const form = new FormData();
     form.append("file", file);
     const response = await fetch(`/api/v1/financial-imports/${type}/preview`, {
@@ -1180,7 +1181,7 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
     if (response.ok) {
       setPreview(data);
       setMessage("");
-    } else setMessage(data?.title || "Не удалось прочитать файл");
+    } else setMessage(data?.title || t("financial.readError"));
     setBusy(false);
     event.target.value = "";
   };
@@ -1190,40 +1191,40 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
     const response = await fetch(`/api/v1/financial-imports/${preview.id}/confirm`, { method: "POST", headers });
     const data = await response.json().catch(() => null);
     if (response.ok) {
-      setMessage(`Применено строк: ${data.appliedRows}`);
+      setMessage(`${t("financial.appliedRows")}: ${data.appliedRows}`);
       setPreview(null);
       onApplied?.();
-    } else setMessage(data?.title || "Не удалось применить импорт");
+    } else setMessage(data?.title || t("financial.applyError"));
     setBusy(false);
   };
   return (
     <article className="import-preview financial-import">
       <div>
-        <h2>{type === "Expenses" ? "Импорт расходов" : "Импорт фактических комиссий"}</h2>
-        <p>CSV/XLSX до 5 МБ. Изменения применятся только после подтверждения.</p>
-        <a href={`/api/v1/financial-imports/${type}/template.xlsx`}>Скачать шаблон XLSX</a>
+        <h2>{type === "Expenses" ? t("financial.expensesImport") : t("financial.feesImport")}</h2>
+        <p>{t("financial.importLead")}</p>
+        <a href={`/api/v1/financial-imports/${type}/template.xlsx`}>{t("financial.downloadTemplate")}</a>
       </div>
       <label className="primary file-button">
-        {busy ? "Проверяем…" : "Выбрать файл"}
+        {busy ? t("financial.checking") : t("financial.chooseFile")}
         <input type="file" accept=".csv,.xlsx" onChange={upload} disabled={busy} />
       </label>
       {message && <p className="integration-message">{message}</p>}
       {preview && (
         <>
           <p>
-            Строк: {preview.totalRows} · новых: {preview.validRows} · обновлений: {preview.updateRows} · дублей: {preview.duplicateRows} · ошибок: {preview.errorRows}
+            {t("financial.rows")}: {preview.totalRows} · {t("financial.newRows")}: {preview.validRows} · {t("financial.updates")}: {preview.updateRows} · {t("financial.duplicates")}: {preview.duplicateRows} · {t("financial.errors")}: {preview.errorRows}
           </p>
           <button className="primary" onClick={confirm} disabled={busy || !preview.expectedChanges}>
-            Применить {preview.expectedChanges} изменений
+            {t("financial.apply")} {preview.expectedChanges} {t("financial.changes")}
           </button>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Строка</th>
-                  <th>Сумма</th>
-                  <th>Дата / связь</th>
-                  <th>Статус</th>
+                  <th>{t("financial.row")}</th>
+                  <th>{t("financial.amount")}</th>
+                  <th>{t("financial.dateLink")}</th>
+                  <th>{t("financial.status")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1247,6 +1248,9 @@ function FinancialImporter({ session, type, onApplied }: { session: Session; typ
 }
 
 function Expenses({ session, products, orders }: { session: Session; products: Product[]; orders: Order[] }) {
+  const { t, locale } = useI18n();
+  const localeCode = locale === "kk" ? "kk-KZ" : "ru-RU";
+  const expenseTypeLabel = (type: string) => ({ Advertising: t("expenses.advertising"), Packaging: t("expenses.packaging"), Fulfillment: t("expenses.fulfillment"), Services: t("expenses.services"), Other: t("expenses.other") }[type] || type);
   const [rows, setRows] = useState<any[]>([]),
     [message, setMessage] = useState("");
   const headers = { "X-Organization-Id": session.organizationId };
@@ -1273,7 +1277,7 @@ function Expenses({ session, products, orders }: { session: Session; products: P
         comment: f.get("comment"),
       }),
     });
-    setMessage(r.ok ? "Расход добавлен" : "Не удалось добавить расход");
+    setMessage(r.ok ? t("expenses.added") : t("expenses.addError"));
     if (r.ok) {
       e.currentTarget.reset();
       load();
@@ -1287,37 +1291,37 @@ function Expenses({ session, products, orders }: { session: Session; products: P
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">ЗАТРАТЫ</span>
-          <h1>Расходы</h1>
-          <p>Реклама, упаковка, фулфилмент, сервисы и прочие затраты.</p>
+          <span className="eyebrow">{t("expenses.eyebrow")}</span>
+          <h1>{t("expenses.title")}</h1>
+          <p>{t("expenses.lead")}</p>
         </div>
       </div>
       <article className="entry-card">
         <form className="expense-form" onSubmit={submit}>
           <select name="type">
-            <option value="Advertising">Реклама</option>
-            <option value="Packaging">Упаковка</option>
-            <option value="Fulfillment">Фулфилмент</option>
-            <option value="Services">Сервисы</option>
-            <option value="Other">Прочее</option>
+            <option value="Advertising">{t("expenses.advertising")}</option>
+            <option value="Packaging">{t("expenses.packaging")}</option>
+            <option value="Fulfillment">{t("expenses.fulfillment")}</option>
+            <option value="Services">{t("expenses.services")}</option>
+            <option value="Other">{t("expenses.other")}</option>
           </select>
-          <input name="amount" type="number" min="0.01" step="0.01" placeholder="Сумма, ₸" required />
+          <input name="amount" type="number" min="0.01" step="0.01" placeholder={t("expenses.amountPlaceholder")} required />
           <input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required />
-          <input name="periodEnd" type="date" aria-label="Конец периода" title="Необязательно: конец периода расхода" />
+          <input name="periodEnd" type="date" aria-label={t("expenses.periodEnd")} title={t("expenses.periodEndHint")} />
           <select name="productId">
-            <option value="">Вся организация</option>
+            <option value="">{t("expenses.organizationAll")}</option>
             {products.map((p) => (
               <option value={p.id} key={p.id}>
                 {p.sku}
               </option>
             ))}
           </select>
-          <select name="orderId" aria-label="Заказ">
-            <option value="">Без привязки к заказу</option>
-            {orders.map((order)=><option value={order.id} key={order.id}>Заказ {order.externalId||order.id}</option>)}
+          <select name="orderId" aria-label={t("expenses.order")}>
+            <option value="">{t("expenses.noOrder")}</option>
+            {orders.map((order)=><option value={order.id} key={order.id}>{t("expenses.order")} {order.externalId||order.id}</option>)}
           </select>
-          <input name="comment" placeholder="Комментарий" />
-          <button className="primary">Добавить</button>
+          <input name="comment" placeholder={t("expenses.comment")} />
+          <button className="primary">{t("expenses.add")}</button>
         </form>
         {message && <p className="integration-message">{message}</p>}
       </article>
@@ -1327,25 +1331,25 @@ function Expenses({ session, products, orders }: { session: Session; products: P
           <table>
             <thead>
               <tr>
-                <th>Дата / период</th>
-                <th>Тип</th>
-                <th>Сумма</th>
-                <th>Привязка</th>
-                <th>Комментарий</th>
+                <th>{t("expenses.datePeriod")}</th>
+                <th>{t("expenses.type")}</th>
+                <th>{t("financial.amount")}</th>
+                <th>{t("expenses.link")}</th>
+                <th>{t("expenses.comment")}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{new Date(r.date).toLocaleDateString("ru-RU")}{r.periodEnd&&r.periodEnd!==r.date?` — ${new Date(r.periodEnd).toLocaleDateString("ru-RU")}`:""}</td>
-                  <td>{r.type}</td>
+                  <td>{new Date(r.date).toLocaleDateString(localeCode)}{r.periodEnd&&r.periodEnd!==r.date?` — ${new Date(r.periodEnd).toLocaleDateString(localeCode)}`:""}</td>
+                  <td>{expenseTypeLabel(r.type)}</td>
                   <td>{money(r.amount)}</td>
-                  <td>{r.orderId?`Заказ ${orders.find((order)=>order.id===r.orderId)?.externalId||r.orderId}`:r.productId ? products.find((p) => p.id === r.productId)?.sku : "Организация"}</td>
+                  <td>{r.orderId?`${t("expenses.order")} ${orders.find((order)=>order.id===r.orderId)?.externalId||r.orderId}`:r.productId ? products.find((p) => p.id === r.productId)?.sku : t("expenses.organization")}</td>
                   <td>{r.comment || "—"}</td>
                   <td>
                     <button className="text-danger" onClick={() => remove(r.id)}>
-                      Удалить
+                      {t("expenses.delete")}
                     </button>
                   </td>
                 </tr>
@@ -1359,6 +1363,8 @@ function Expenses({ session, products, orders }: { session: Session; products: P
 }
 
 function Fees({ session, products }: { session: Session; products: Product[] }) {
+  const { t, locale } = useI18n();
+  const localeCode = locale === "kk" ? "kk-KZ" : "ru-RU";
   const [rows, setRows] = useState<any[]>([]),
     [message, setMessage] = useState(""),
     [scope, setScope] = useState("Default"),
@@ -1389,35 +1395,35 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
         category: scope === "Category" ? f.get("category") : null,
       }),
     });
-    setMessage(r.ok ? "Правило комиссии создано" : "Проверьте параметры правила");
+    setMessage(r.ok ? t("fees.created") : t("fees.checkParams"));
     if (r.ok) load();
   };
   const endRule = async (id: string) => {
     const effectiveTo = endDates[id];
-    if (!effectiveTo) return setMessage("Укажите дату окончания правила");
+    if (!effectiveTo) return setMessage(t("fees.endDateRequired"));
     const r = await fetch(`/api/v1/fee-rules/${id}/end`, {
       method: "PUT",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ effectiveTo }),
     });
-    setMessage(r.ok ? "Период действия правила обновлён" : "Не удалось завершить правило");
+    setMessage(r.ok ? t("fees.updated") : t("fees.endError"));
     if (r.ok) load();
   };
   return (
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">ФИНАНСОВЫЕ ПРАВИЛА</span>
-          <h1>Комиссии</h1>
-          <p>Фактическое удержание имеет приоритет над версионным правилом.</p>
+          <span className="eyebrow">{t("fees.eyebrow")}</span>
+          <h1>{t("fees.title")}</h1>
+          <p>{t("fees.lead")}</p>
         </div>
       </div>
       <article className="entry-card">
         <form className="expense-form" onSubmit={submit}>
           <select name="scope" value={scope} onChange={(e) => setScope(e.target.value)}>
-            <option value="Default">Для организации</option>
-            <option value="Category">Для категории</option>
-            <option value="Product">Для товара</option>
+            <option value="Default">{t("fees.scopeOrganization")}</option>
+            <option value="Category">{t("fees.scopeCategory")}</option>
+            <option value="Product">{t("fees.scopeProduct")}</option>
           </select>
           {scope === "Product" && <select name="productId" required>
             {products.map((p) => (
@@ -1427,17 +1433,17 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
             ))}
           </select>}
           {scope === "Category" && <select name="category" required>
-            <option value="">Выберите категорию</option>
+            <option value="">{t("fees.chooseCategory")}</option>
             {categories.map((category) => <option value={category} key={category}>{category}</option>)}
           </select>}
           <select name="valueType">
-            <option value="Percentage">Процент</option>
-            <option value="Fixed">Фиксированная сумма</option>
+            <option value="Percentage">{t("fees.percentage")}</option>
+            <option value="Fixed">{t("fees.fixed")}</option>
           </select>
-          <input name="value" type="number" min="0" step="0.01" placeholder="Значение" required />
+          <input name="value" type="number" min="0" step="0.01" placeholder={t("fees.value")} required />
           <input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required />
-          <input name="effectiveTo" type="date" aria-label="Действует по" />
-          <button className="primary">Создать правило</button>
+          <input name="effectiveTo" type="date" aria-label={t("fees.effectiveTo")} />
+          <button className="primary">{t("fees.create")}</button>
         </form>
         {message && <p className="integration-message">{message}</p>}
       </article>
@@ -1447,28 +1453,28 @@ function Fees({ session, products }: { session: Session; products: Product[] }) 
           <table>
             <thead>
               <tr>
-                <th>Область</th>
-                <th>Назначение</th>
-                <th>Тип</th>
-                <th>Значение</th>
-                <th>Действует с</th>
-                <th>Действует по</th>
-                <th>Завершить</th>
+                <th>{t("fees.scope")}</th>
+                <th>{t("fees.assignment")}</th>
+                <th>{t("fees.type")}</th>
+                <th>{t("fees.value")}</th>
+                <th>{t("fees.effectiveFrom")}</th>
+                <th>{t("fees.effectiveTo")}</th>
+                <th>{t("fees.finish")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.scope}</td>
-                  <td>{r.scope === "Product" ? products.find((p) => p.id === r.productId)?.sku || "Товар удалён" : r.scope === "Category" ? r.category : "Все товары"}</td>
-                  <td>{r.valueType}</td>
+                  <td>{r.scope === "Product" ? t("fees.scopeProduct") : r.scope === "Category" ? t("fees.scopeCategory") : t("fees.scopeOrganization")}</td>
+                  <td>{r.scope === "Product" ? products.find((p) => p.id === r.productId)?.sku || t("fees.productDeleted") : r.scope === "Category" ? r.category : t("fees.allProducts")}</td>
+                  <td>{r.valueType === "Percentage" ? t("fees.percentage") : t("fees.fixed")}</td>
                   <td>{r.valueType === "Percentage" ? `${r.value}%` : money(r.value)}</td>
-                  <td>{new Date(r.effectiveFrom).toLocaleDateString("ru-RU")}</td>
-                  <td>{r.effectiveTo ? new Date(r.effectiveTo).toLocaleDateString("ru-RU") : "Бессрочно"}</td>
+                  <td>{new Date(r.effectiveFrom).toLocaleDateString(localeCode)}</td>
+                  <td>{r.effectiveTo ? new Date(r.effectiveTo).toLocaleDateString(localeCode) : t("fees.unlimited")}</td>
                   <td>
                     <div className="rule-end">
                       <input type="date" min={r.effectiveFrom} value={endDates[r.id] || ""} onChange={(e) => setEndDates((x) => ({ ...x, [r.id]: e.target.value }))} />
-                      <button type="button" onClick={() => endRule(r.id)}>Завершить</button>
+                      <button type="button" onClick={() => endRule(r.id)}>{t("fees.finish")}</button>
                     </div>
                   </td>
                 </tr>
