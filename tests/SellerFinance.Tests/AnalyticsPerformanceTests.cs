@@ -38,8 +38,10 @@ public sealed class AnalyticsPerformanceTests
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);db.Products.Add(new(){Id="p",OrganizationId="cache",Sku="P",Name="P"});db.ProductCostHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId="cache",ProductId="p",CostAmount=1,EffectiveFrom=new(2025,1,1),CreatedByUserId="test"});db.Orders.Add(Order("first",100));await db.SaveChangesAsync();
         Assert.Equal(100,Revenue(await DbAnalytics.SummaryAsync(db,"cache")));Assert.Equal(100,Revenue(await DbAnalytics.SummaryAsync(db,"cache")));
+        var revisionBefore=(await db.AnalyticsRevisions.AsNoTracking().SingleAsync(x=>x.OrganizationId=="cache")).Version;
         db.Orders.Add(Order("second",250));await db.SaveChangesAsync();
         Assert.Equal(350,Revenue(await DbAnalytics.SummaryAsync(db,"cache")));
+        Assert.True((await db.AnalyticsRevisions.AsNoTracking().SingleAsync(x=>x.OrganizationId=="cache")).Version>revisionBefore);
     }
 
     private static void Seed(SellerFinanceDbContext db)

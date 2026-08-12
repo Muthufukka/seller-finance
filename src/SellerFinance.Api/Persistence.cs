@@ -36,18 +36,22 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
     public DbSet<NotificationDeliveryEntity> NotificationDeliveries => Set<NotificationDeliveryEntity>();
     public DbSet<OrganizationFeatureFlagEntity> OrganizationFeatureFlags => Set<OrganizationFeatureFlagEntity>();
     public DbSet<SubscriptionEntity> Subscriptions => Set<SubscriptionEntity>();
+    public DbSet<AnalyticsRevisionEntity> AnalyticsRevisions => Set<AnalyticsRevisionEntity>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
-        var tenants=ChangedTenants();var result=base.SaveChanges(acceptAllChangesOnSuccess);foreach(var tenant in tenants)DbAnalytics.Invalidate(tenant);return result;
+        var tenants=ChangedTenants();var deleted=DeletedOrganizations();if(!Database.IsRelational()){var result=base.SaveChanges(acceptAllChangesOnSuccess);foreach(var tenant in tenants.Except(deleted)){var revision=AnalyticsRevisions.Find(tenant);if(revision is null)AnalyticsRevisions.Add(new(){OrganizationId=tenant,Version=1});else{revision.Version++;revision.UpdatedAt=DateTimeOffset.UtcNow;}}return result+base.SaveChanges(acceptAllChangesOnSuccess);}
+        using var transaction=Database.CurrentTransaction is null?Database.BeginTransaction():null;var saved=base.SaveChanges(acceptAllChangesOnSuccess);foreach(var tenant in tenants.Except(deleted))Database.ExecuteSqlInterpolated($"INSERT INTO \"AnalyticsRevisions\" (\"OrganizationId\", \"Version\", \"UpdatedAt\") VALUES ({tenant}, 1, {DateTimeOffset.UtcNow}) ON CONFLICT (\"OrganizationId\") DO UPDATE SET \"Version\" = \"AnalyticsRevisions\".\"Version\" + 1, \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\"");transaction?.Commit();return saved;
     }
 
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess,CancellationToken cancellationToken=default)
     {
-        var tenants=ChangedTenants();var result=await base.SaveChangesAsync(acceptAllChangesOnSuccess,cancellationToken);foreach(var tenant in tenants)DbAnalytics.Invalidate(tenant);return result;
+        var tenants=ChangedTenants();var deleted=DeletedOrganizations();if(!Database.IsRelational()){var result=await base.SaveChangesAsync(acceptAllChangesOnSuccess,cancellationToken);foreach(var tenant in tenants.Except(deleted)){var revision=await AnalyticsRevisions.FindAsync([tenant],cancellationToken);if(revision is null)AnalyticsRevisions.Add(new(){OrganizationId=tenant,Version=1});else{revision.Version++;revision.UpdatedAt=DateTimeOffset.UtcNow;}}return result+await base.SaveChangesAsync(acceptAllChangesOnSuccess,cancellationToken);}
+        await using var transaction=Database.CurrentTransaction is null?await Database.BeginTransactionAsync(cancellationToken):null;var saved=await base.SaveChangesAsync(acceptAllChangesOnSuccess,cancellationToken);foreach(var tenant in tenants.Except(deleted))await Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"AnalyticsRevisions\" (\"OrganizationId\", \"Version\", \"UpdatedAt\") VALUES ({tenant}, 1, {DateTimeOffset.UtcNow}) ON CONFLICT (\"OrganizationId\") DO UPDATE SET \"Version\" = \"AnalyticsRevisions\".\"Version\" + 1, \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\"",cancellationToken);if(transaction is not null)await transaction.CommitAsync(cancellationToken);return saved;
     }
 
     private string[] ChangedTenants()=>ChangeTracker.Entries().Where(x=>x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).Select(x=>x.Entity switch{OrganizationEntity organization=>organization.Id,_=>x.Metadata.FindProperty("OrganizationId") is null?null:x.Property("OrganizationId").CurrentValue as string}).Where(x=>!String.IsNullOrWhiteSpace(x)).Distinct().Cast<string>().ToArray();
+    private string[] DeletedOrganizations()=>ChangeTracker.Entries<OrganizationEntity>().Where(x=>x.State==EntityState.Deleted).Select(x=>x.Entity.Id).ToArray();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -127,6 +131,8 @@ public sealed class SellerFinanceDbContext(DbContextOptions<SellerFinanceDbConte
         modelBuilder.Entity<SubscriptionEntity>().HasKey(x=>x.Id);
         modelBuilder.Entity<SubscriptionEntity>().HasIndex(x=>x.OrganizationId).IsUnique();
         modelBuilder.Entity<SubscriptionEntity>().HasOne<OrganizationEntity>().WithOne().HasForeignKey<SubscriptionEntity>(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AnalyticsRevisionEntity>().HasKey(x=>x.OrganizationId);
+        modelBuilder.Entity<AnalyticsRevisionEntity>().HasOne<OrganizationEntity>().WithOne().HasForeignKey<AnalyticsRevisionEntity>(x=>x.OrganizationId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -135,6 +141,13 @@ public enum SubscriptionPlan { Trial, Start, Pro, Business }
 public enum SubscriptionStatus { Trialing, Active, Suspended, Expired }
 public enum NotificationEventType { MissingCost, NegativeMargin, SyncRequiresAttention }
 public enum NotificationDeliveryStatus { Queued, Sending, Sent, RetryScheduled, Failed, Suppressed }
+
+public sealed class AnalyticsRevisionEntity
+{
+    public string OrganizationId { get; set; }="";
+    public long Version { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }=DateTimeOffset.UtcNow;
+}
 
 public sealed class ExportJobEntity
 {
@@ -570,14 +583,7 @@ public static class DatabaseSeed
 public static class DbAnalytics
 {
     private readonly record struct FactsCacheKey(string Database,string Tenant,DateOnly? From,DateOnly? To,bool CompleteCostsOnly,long Version);
-    private static readonly ConcurrentDictionary<string,long> Versions=new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<FactsCacheKey,Lazy<Task<IReadOnlyList<OrderFact>>>> FactsCache=[];
-
-    public static void Invalidate(string tenant)
-    {
-        Versions.AddOrUpdate(tenant,1,(_,version)=>version+1);
-        if(FactsCache.Count>256)foreach(var key in FactsCache.Keys.Where(x=>x.Version<Versions.GetValueOrDefault(x.Tenant)-1))FactsCache.TryRemove(key,out _);
-    }
 
     public static async Task<object> SummaryAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
@@ -690,7 +696,7 @@ public static class DbAnalytics
 
     private static async Task<IReadOnlyList<OrderFact>> FactsAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
-        var database=db.Database.IsRelational()?Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(db.Database.GetConnectionString()??db.Database.ProviderName??"relational"))):db.ContextId.InstanceId.ToString("N");var key=new FactsCacheKey(database,tenant,from,to,completeCostsOnly,Versions.GetValueOrDefault(tenant));var lazy=FactsCache.GetOrAdd(key,_=>new(()=>LoadFactsAsync(db,tenant,from,to,completeCostsOnly),LazyThreadSafetyMode.ExecutionAndPublication));
+        var database=db.Database.IsRelational()?Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(db.Database.GetConnectionString()??db.Database.ProviderName??"relational"))):db.ContextId.InstanceId.ToString("N");var version=await db.AnalyticsRevisions.AsNoTracking().Where(x=>x.OrganizationId==tenant).Select(x=>x.Version).SingleOrDefaultAsync();var key=new FactsCacheKey(database,tenant,from,to,completeCostsOnly,version);foreach(var old in FactsCache.Keys.Where(x=>x.Database==database&&x.Tenant==tenant&&x.Version!=version))FactsCache.TryRemove(old,out _);var lazy=FactsCache.GetOrAdd(key,_=>new(()=>LoadFactsAsync(db,tenant,from,to,completeCostsOnly),LazyThreadSafetyMode.ExecutionAndPublication));
         try{return await lazy.Value;}catch{FactsCache.TryRemove(key,out _);throw;}
     }
 
