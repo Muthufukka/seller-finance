@@ -504,16 +504,16 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
     <section className="content">
       <div className="title-row">
         <div>
-          <span className="eyebrow">12 августа 2026</span>
+          <span className="eyebrow">{new Date().toLocaleDateString("ru-RU",{day:"numeric",month:"long",year:"numeric"})}</span>
           <h1>Финансовый обзор</h1>
           <p>Главное о продажах и прибыли за выбранный период.</p>
         </div>
         <div className="actions">
-          <button className="secondary">
+          <button className="secondary" onClick={()=>onNavigate("exports")}>
             <Download />
             Экспорт
           </button>
-          <button className="primary">
+          <button className="primary" onClick={()=>onNavigate("integrations")}>
             <RefreshCw className={loading ? "spin" : ""} />
             Синхронизировать
           </button>
@@ -556,11 +556,15 @@ function Dashboard({ summary, products, points, problems, loading, period, onPer
         </div>
       )}
       <div className="kpis">
-        <Kpi label="Выручка" value={money(summary.revenue)} delta="+12,4%" good />
-        <Kpi label="Операционная прибыль" value={money(summary.operatingProfit)} delta="+8,7%" good />
+        <Kpi label="Выручка" value={money(summary.revenue)} sub={`${summary.orders} заказов`} />
+        <Kpi label="Продано единиц" value={String(summary.units)} />
+        <Kpi label="COGS" value={money(summary.cogs)} sub={summary.isPreliminary?"Неполное покрытие":"Полная себестоимость"} warning={summary.isPreliminary} />
+        <Kpi label="Валовая прибыль" value={money(summary.grossProfit)} sub={summary.isPreliminary?"Предварительно":undefined} warning={summary.isPreliminary} />
+        <Kpi label="Комиссии" value={money(summary.marketplaceFees)} />
+        <Kpi label="Доставка" value={money(summary.delivery)} />
         <Kpi label="Расходы периода" value={money(summary.operatingExpenses)} sub="Прямые и общеорганизационные" />
-        <Kpi label="Маржинальность" value={pct(summary.operatingMarginPct)} delta="−1,2 п.п." />
-        <Kpi label="Заказы" value={String(summary.orders)} sub={`${summary.units} единиц`} />
+        <Kpi label="Операционная прибыль" value={money(summary.operatingProfit)} sub={summary.isPreliminary?"Предварительно":undefined} warning={summary.isPreliminary} />
+        <Kpi label="Операционная маржа" value={pct(summary.operatingMarginPct)} sub={summary.revenue===0?"Нет выручки":undefined} />
       </div>
       <div className="grid">
         <article className="chart-card">
@@ -845,9 +849,9 @@ function OrdersPage({ initialOrders, session, products }: { initialOrders: Order
   );
 }
 
-function Kpi({ label, value, delta, sub, good }: { label: string; value: string; delta?: string; sub?: string; good?: boolean }) {
+function Kpi({ label, value, delta, sub, good, warning }: { label: string; value: string; delta?: string; sub?: string; good?: boolean; warning?:boolean }) {
   return (
-    <article className="kpi">
+    <article className={`kpi ${warning?"warning":""}`}>
       <span>{label}</span>
       <b>{value}</b>
       <div className={good ? "good" : ""}>
