@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using SellerFinance.Api;
+using SellerFinance.Domain;
 
 namespace SellerFinance.Tests;
 
@@ -47,7 +48,15 @@ public sealed class KaspiIntegrationTests
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var first=Guid.NewGuid();var second=Guid.NewGuid();var source=new KaspiOrderDto("external-1","100",1000,"COMPLETED",DateTimeOffset.UtcNow,[new("entry-1","SKU","Product",null,1,1000,0)]);
         await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",second,[source]);await db.SaveChangesAsync();
-        Assert.Equal(2,await db.Orders.CountAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==first).ToArrayAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==second).ToArrayAsync());
+        Assert.Equal(2,await db.Orders.CountAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==first).ToArrayAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==second).ToArrayAsync());Assert.Equal(2,await db.OrderStatusHistory.CountAsync());
+    }
+
+    [Fact]
+    public async Task Importer_Records_Only_Real_Status_Transitions_And_Preserves_Kaspi_Status()
+    {
+        await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var connection=Guid.NewGuid();var created=DateTimeOffset.UtcNow;KaspiOrderDto Source(string status)=>new("external","CODE",1000,status,created,[new("line","SKU","Product",null,1,1000,0)]);
+        await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("COMPLETED")]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("COMPLETED")]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("KASPI_DELIVERY_RETURN_REQUESTED")]);await db.SaveChangesAsync();
+        var history=await db.OrderStatusHistory.OrderBy(x=>x.ChangedAt).ToArrayAsync();Assert.Equal(2,history.Length);Assert.Equal(OrderStatus.Completed,history[0].Status);Assert.Equal("KASPI_DELIVERY_RETURN_REQUESTED",history[1].ExternalStatus);Assert.Equal(OrderStatus.Pending,history[1].Status);Assert.Equal(OrderStatus.Pending,(await db.Orders.SingleAsync()).Status);
     }
 
     [Fact]

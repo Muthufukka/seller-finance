@@ -47,6 +47,7 @@ public static class OrganizationDeletion
         var deletedProducts = await db.Products.CountAsync(x => x.OrganizationId == organizationId, ct);
 
         db.ActualFees.RemoveRange(db.ActualFees.Where(x => x.OrganizationId == organizationId || orderLineIds.Contains(x.OrderLineId)));
+        db.OrderStatusHistory.RemoveRange(db.OrderStatusHistory.Where(x=>x.OrganizationId==organizationId));
         db.OrderLines.RemoveRange(db.OrderLines.Where(x => orderIds.Contains(x.OrderId)));
         db.Orders.RemoveRange(db.Orders.Where(x => x.OrganizationId == organizationId));
         db.SyncJobs.RemoveRange(db.SyncJobs.Where(x => x.OrganizationId == organizationId));

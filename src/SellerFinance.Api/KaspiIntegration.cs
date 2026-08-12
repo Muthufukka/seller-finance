@@ -140,10 +140,10 @@ public static class KaspiOrderImporter
     {
         foreach(var source in sources)
         {
-            var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.MarketplaceConnectionId==connectionId&&x.ExternalId==source.Id,ct);
-            if(order is null){order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,MarketplaceConnectionId=connectionId,ExternalId=source.Id};db.Orders.Add(order);}
+            var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.MarketplaceConnectionId==connectionId&&x.ExternalId==source.Id,ct);var isNew=order is null;
+            if(order is null){order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,MarketplaceConnectionId=connectionId,ExternalId=source.Id};db.Orders.Add(order);}var mappedStatus=MapStatus(source.Status);if(isNew||order.Status!=mappedStatus)db.OrderStatusHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,OrderId=order.Id,Status=mappedStatus,ExternalStatus=source.Status.Trim().ToUpperInvariant(),ChangedAt=DateTimeOffset.UtcNow});
             order.Code=source.Code;order.TotalPrice=source.TotalPrice;order.PaymentMode=source.PaymentMode;order.SellerDeliveryCost=source.SellerDeliveryCost;
-            order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime);order.CompletionDate=source.CompletedAt.HasValue?DateOnly.FromDateTime(source.CompletedAt.Value.UtcDateTime):null;order.Status=MapStatus(source.Status);order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
+            order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime);order.CompletionDate=source.CompletedAt.HasValue?DateOnly.FromDateTime(source.CompletedAt.Value.UtcDateTime):null;order.Status=mappedStatus;order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
             if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId));}
             var hasCompleteItemDelivery=source.Lines.Count>0&&source.Lines.All(x=>x.ItemDeliveryCost.HasValue);var allocatedDelivery=hasCompleteItemDelivery?null:FinanceCalculator.AllocateByRevenue(source.SellerDeliveryCost,source.Lines.Select(x=>x.Revenue).ToArray());
             for(var index=0;index<source.Lines.Count;index++)

@@ -824,6 +824,7 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
               Код: {detail.code || detail.externalId} · Оплата: {detail.paymentMode || "не указана"} · Завершён: {detail.completionDate ? new Date(detail.completionDate).toLocaleDateString("ru-RU") : "дата отсутствует"}
             </p>
             {detail.calculationDateFallback && <p className="fallback-note">Дата завершения отсутствует — расчёт выполнен по дате создания.</p>}
+            {detail.statusHistory?.[0]?.externalStatus === "KASPI_DELIVERY_RETURN_REQUESTED" && <p className="fallback-note">Запрошен возврат доставки — заказ ещё не считается окончательно возвращённым.</p>}
             <div className="breakdown">
               <div>
                 <span>Выручка</span>
@@ -851,6 +852,10 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
               </div>
               <div><span>Маржа</span><b>{pct(detail.operatingMarginPct)}</b></div>
               <div><span>Coverage</span><b>{pct(detail.coveragePct)}</b></div>
+            </div>
+            <h3>История статусов</h3>
+            <div className="status-history">
+              {detail.statusHistory?.length ? detail.statusHistory.map((item:any,index:number)=><div key={`${item.changedAt}-${index}`}><b>{item.externalStatus || item.status}</b><span>{new Date(item.changedAt).toLocaleString("ru-RU")}</span></div>) : <p className="muted">История появится после следующей синхронизации.</p>}
             </div>
             <h3>Товарные строки</h3>
             {detail.lines?.map((l: any) => (
