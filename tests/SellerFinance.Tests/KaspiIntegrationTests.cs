@@ -58,6 +58,26 @@ public sealed class KaspiIntegrationTests
     }
 
     [Fact]
+    public async Task Client_Classifies_Network_And_Invalid_Contract_Failures_Without_Throwing()
+    {
+        var network=new KaspiClient(new HttpClient(new ThrowingHandler()){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")});
+        var unavailable=await network.GetOrdersAsync("secret",DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,CancellationToken.None);
+        Assert.False(unavailable.Success);Assert.Equal(HttpStatusCode.ServiceUnavailable,unavailable.StatusCode);Assert.Equal("KASPI_UNAVAILABLE",unavailable.ErrorCode);
+
+        var invalid=new KaspiClient(new HttpClient(new StubHandler(HttpStatusCode.OK,"{not-json")){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")});
+        var malformed=await invalid.GetOrdersAsync("secret",DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,CancellationToken.None);
+        Assert.False(malformed.Success);Assert.Equal(HttpStatusCode.BadGateway,malformed.StatusCode);Assert.Equal("KASPI_INVALID_RESPONSE",malformed.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Client_Fails_Explicitly_Instead_Of_Silently_Truncating_At_Page_Limit()
+    {
+        var handler=new FullPageHandler();var client=new KaspiClient(new HttpClient(handler){BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/")});
+        var result=await client.GetOrdersAsync("secret",DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,CancellationToken.None);
+        Assert.False(result.Success);Assert.Equal("KASPI_PAGINATION_LIMIT",result.ErrorCode);Assert.Equal(100,handler.RequestCount);Assert.Empty(result.Orders);
+    }
+
+    [Fact]
     public async Task Importer_Upserts_Per_Connection_And_Allows_Same_External_Order_In_Two_Stores()
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var first=Guid.NewGuid();var second=Guid.NewGuid();var source=new KaspiOrderDto("external-1","100",1000,"COMPLETED",DateTimeOffset.UtcNow,[new("entry-1","SKU","Product",null,1,1000,0)]);
@@ -70,7 +90,7 @@ public sealed class KaspiIntegrationTests
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var connection=Guid.NewGuid();var created=DateTimeOffset.UtcNow;KaspiOrderDto Source(string status)=>new("external","CODE",1000,status,created,[new("line","SKU","Product",null,1,1000,0)]);
         await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("COMPLETED")]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("COMPLETED")]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",connection,[Source("KASPI_DELIVERY_RETURN_REQUESTED")]);await db.SaveChangesAsync();
-        var history=await db.OrderStatusHistory.OrderBy(x=>x.ChangedAt).ToArrayAsync();Assert.Equal(2,history.Length);Assert.Equal(OrderStatus.Completed,history[0].Status);Assert.Equal("KASPI_DELIVERY_RETURN_REQUESTED",history[1].ExternalStatus);Assert.Equal(OrderStatus.Pending,history[1].Status);Assert.Equal(OrderStatus.Pending,(await db.Orders.SingleAsync()).Status);
+        var history=await db.OrderStatusHistory.OrderBy(x=>x.ChangedAt).ToArrayAsync();Assert.Equal(2,history.Length);Assert.Equal(OrderStatus.Completed,history[0].Status);Assert.Equal("KASPI_DELIVERY_RETURN_REQUESTED",history[1].ExternalStatus);Assert.Equal(OrderStatus.Returned,history[1].Status);Assert.Equal(OrderStatus.Returned,(await db.Orders.SingleAsync()).Status);
     }
 
     [Fact]
@@ -96,5 +116,15 @@ public sealed class KaspiIntegrationTests
     private sealed class RouteHandler(string orders,string entries,string product):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){var path=request.RequestUri!.AbsolutePath;var body=path.EndsWith("/product")?product:path.EndsWith("/entries")?entries:orders;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/vnd.api+json")});}
+    }
+    private sealed class ThrowingHandler:HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>throw new HttpRequestException("network unavailable");
+    }
+    private sealed class FullPageHandler:HttpMessageHandler
+    {
+        private static readonly string Body="{\"data\":["+String.Join(',',Enumerable.Range(0,100).Select(x=>$"{{\"type\":\"orders\",\"id\":\"{x}\",\"attributes\":{{\"code\":\"{x}\",\"totalPrice\":1,\"status\":\"COMPLETED\",\"creationDate\":1786453200000}}}}"))+"]}";
+        public int RequestCount { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){RequestCount++;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(Body,Encoding.UTF8,"application/vnd.api+json")});}
     }
 }

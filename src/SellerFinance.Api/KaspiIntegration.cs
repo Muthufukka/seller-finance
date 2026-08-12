@@ -41,6 +41,18 @@ public sealed class KaspiClient(HttpClient http)
 {
     public async Task<KaspiResult> GetOrdersAsync(string token,DateTimeOffset from,DateTimeOffset to,CancellationToken cancellationToken)
     {
+        try { return await GetOrdersCoreAsync(token,from,to,cancellationToken); }
+        catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested) { throw; }
+        catch(HttpRequestException) { return new(false,HttpStatusCode.ServiceUnavailable,"KASPI_UNAVAILABLE",[]); }
+        catch(TaskCanceledException) { return new(false,HttpStatusCode.ServiceUnavailable,"KASPI_TIMEOUT",[]); }
+        catch(Exception ex) when(ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            return new(false,HttpStatusCode.BadGateway,"KASPI_INVALID_RESPONSE",[]);
+        }
+    }
+
+    private async Task<KaspiResult> GetOrdersCoreAsync(string token,DateTimeOffset from,DateTimeOffset to,CancellationToken cancellationToken)
+    {
         var orders=new List<KaspiOrderDto>();
         HttpStatusCode statusCode=HttpStatusCode.OK;
         for(var page=0;page<100;page++)
@@ -55,6 +67,7 @@ public sealed class KaspiClient(HttpClient http)
                 orders.Add(new(id,code,price,status,created,[],completed,paymentMode,sellerDelivery));
             }
             if(count<100)break;
+            if(page==99)return new(false,HttpStatusCode.UnprocessableEntity,"KASPI_PAGINATION_LIMIT",[]);
         }
         var enriched=new List<KaspiOrderDto>();foreach(var order in orders){var lines=await GetLinesAsync(token,order.Id,cancellationToken);if(!lines.Success)return new(false,lines.StatusCode,lines.ErrorCode,[]);enriched.Add(order with{Lines=lines.Lines});}return new(true,statusCode,null,enriched);
     }
@@ -163,5 +176,5 @@ public static class KaspiOrderImporter
             }
         }
     }
-    private static OrderStatus MapStatus(string value)=>value.ToUpperInvariant() switch{"COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED"=>OrderStatus.Cancelled,_=>OrderStatus.Pending};
+    private static OrderStatus MapStatus(string value)=>value.Trim().ToUpperInvariant() switch{"COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED" or "KASPI_DELIVERY_RETURN_REQUESTED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED" or "CANCELLING"=>OrderStatus.Cancelled,_=>OrderStatus.Pending};
 }
