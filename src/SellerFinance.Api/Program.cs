@@ -149,6 +149,11 @@ api.MapPut("/organizations/{id}",async(HttpContext ctx,string id,OrganizationSet
     if(result.Failure!=OrganizationSettingsFailure.None)return Results.BadRequest(new{title=result.Failure switch{OrganizationSettingsFailure.InvalidName=>"Название должно содержать от 2 до 120 символов",OrganizationSettingsFailure.InvalidTimeZone=>"Неизвестный часовой пояс IANA",_=>"В MVP поддерживается валюта KZT"}});
     AuditWriter.Add(db,ctx,"organization.settings.changed","Organization",id,JsonSerializer.Serialize(new{result.Organization!.Name,result.Organization.TimeZone,result.Organization.Currency}));await db.SaveChangesAsync(ct);return Results.Ok(new{result.Organization.Name,result.Organization.TimeZone,result.Organization.Currency});
 }).RequireRateLimiting("sensitive");
+api.MapDelete("/organizations/{id}",async(HttpContext ctx,string id,DeleteOrganizationRequest request,SellerFinanceDbContext db,UserManager<AppUser> users,SignInManager<AppUser> signIn,CancellationToken ct)=>
+{
+    if(ctx.Membership().Role!=OrganizationRole.Owner||id!=ctx.Tenant())return Results.Forbid();var userId=ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)!;var user=await users.FindByIdAsync(userId);if(user is null)return Results.NotFound();if(!await users.CheckPasswordAsync(user,request.Password))return Results.Problem("Неверный пароль",statusCode:401);
+    var result=await OrganizationDeletion.DeleteAsync(db,id,userId,ctx.Membership(),request.OrganizationName,ct);if(result.Failure==OrganizationDeletionFailure.NotFound)return Results.NotFound();if(result.Failure==OrganizationDeletionFailure.Forbidden)return Results.Forbid();if(result.Failure==OrganizationDeletionFailure.ConfirmationMismatch)return Results.BadRequest(new{title="Название организации не совпадает"});if(result.Failure==OrganizationDeletionFailure.ActiveSync)return Results.Conflict(new{title="Дождитесь завершения синхронизации Kaspi"});await signIn.SignOutAsync();return Results.Ok(new{deleted=true,result.UserDeleted,result.DeletedOrders,result.DeletedProducts});
+}).RequireRateLimiting("sensitive");
 api.MapGet("/organizations/{id}/members",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>id!=ctx.Tenant()?Results.NotFound():Results.Ok(await(from m in db.OrganizationUsers.AsNoTracking() join u in db.Users on m.UserId equals u.Id where m.OrganizationId==id&&m.JoinedAt!=null select new{u.Id,u.Email,u.DisplayName,role=m.Role.ToString(),m.JoinedAt}).ToArrayAsync()));
 api.MapPut("/organizations/{id}/members/{userId}/role",async(HttpContext ctx,string id,string userId,ChangeRoleRequest request,SellerFinanceDbContext db)=>{if(id!=ctx.Tenant())return Results.NotFound();if(!ctx.Membership().CanManageMembers())return Results.Forbid();if(!Enum.TryParse<OrganizationRole>(request.Role,true,out var role)||role==OrganizationRole.Owner)return Results.BadRequest(new{title="Недопустимая роль"});var membership=await db.OrganizationUsers.SingleOrDefaultAsync(x=>x.OrganizationId==id&&x.UserId==userId&&x.Role!=OrganizationRole.Owner);if(membership is null)return Results.NotFound();membership.Role=role;AuditWriter.Add(db,ctx,"member.role.changed","OrganizationUser",userId,$"{{\"role\":\"{role}\"}}");await db.SaveChangesAsync();return Results.NoContent();});
 api.MapPost("/organizations/{id}/members", async (HttpContext ctx, string id, InviteMemberRequest request, SellerFinanceDbContext db) =>
@@ -301,6 +306,7 @@ record ForgotPasswordRequest(string Email);
 record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);
 record OrganizationSettingsRequest(string Name,string TimeZone,string Currency);
+record DeleteOrganizationRequest(string OrganizationName,string Password);
 record AcceptInvitationRequest(string Token);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 record KaspiConnectionRequest(string Token,string? DisplayName=null);
