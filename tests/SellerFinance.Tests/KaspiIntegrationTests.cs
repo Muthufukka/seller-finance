@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using SellerFinance.Api;
 using SellerFinance.Domain;
 
@@ -9,6 +11,18 @@ namespace SellerFinance.Tests;
 
 public sealed class KaspiIntegrationTests
 {
+    [Fact]
+    public async Task Importer_Does_Not_Update_Order_From_Another_Tenant_Even_With_Matching_Connection_And_External_Id()
+    {
+        await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var connection=Guid.NewGuid();db.Orders.Add(new(){Id="foreign",OrganizationId="other",MarketplaceConnectionId=connection,ExternalId="external",Code="PRIVATE",Date=new(2026,1,1)});await db.SaveChangesAsync();var source=new KaspiOrderDto("external","PUBLIC",1000,"COMPLETED",DateTimeOffset.UtcNow,[new("line","SKU","Product",null,1,1000,0)]);await KaspiOrderImporter.UpsertAsync(db,"org",connection,[source]);await db.SaveChangesAsync();Assert.Equal("PRIVATE",(await db.Orders.SingleAsync(x=>x.Id=="foreign")).Code);Assert.Equal(1,await db.Orders.CountAsync(x=>x.OrganizationId=="org"));
+    }
+
+    [Fact]
+    public async Task Sync_Worker_Quarantines_Job_When_Connection_Belongs_To_Another_Tenant()
+    {
+        var database=Guid.NewGuid().ToString();var services=new ServiceCollection().AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database)).BuildServiceProvider();var connectionId=Guid.NewGuid();var jobId=Guid.NewGuid();await using(var scope=services.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.Organizations.AddRange(new(){Id="org",Name="Org"},new(){Id="other",Name="Other"});db.Subscriptions.AddRange(new(){Id=Guid.NewGuid(),OrganizationId="org",Status=SubscriptionStatus.Trialing,PeriodEnd=DateTimeOffset.UtcNow.AddDays(1)},new(){Id=Guid.NewGuid(),OrganizationId="other",Status=SubscriptionStatus.Trialing,PeriodEnd=DateTimeOffset.UtcNow.AddDays(1)});db.MarketplaceConnections.Add(new(){Id=connectionId,OrganizationId="other",Status=MarketplaceConnectionStatus.Active});db.SyncJobs.Add(new(){Id=jobId,OrganizationId="org",MarketplaceConnectionId=connectionId,Status=SyncJobStatus.Queued,WindowFrom=DateTimeOffset.UtcNow.AddDays(-1),WindowTo=DateTimeOffset.UtcNow});await db.SaveChangesAsync();}
+        await new KaspiSyncWorker(services.GetRequiredService<IServiceScopeFactory>(),NullLogger<KaspiSyncWorker>.Instance).ProcessOneAsync(default);await using var verify=services.CreateAsyncScope();var job=await verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().SyncJobs.SingleAsync(x=>x.Id==jobId);Assert.Equal(SyncJobStatus.RequiresAttention,job.Status);Assert.Equal("TENANT_CONNECTION_MISMATCH",job.ErrorCode);
+    }
     [Fact]
     public void TokenCipher_RoundTrips_Without_Persisting_Plaintext()
     {

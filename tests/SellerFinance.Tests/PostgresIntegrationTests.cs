@@ -29,6 +29,13 @@ public sealed class PostgresIntegrationTests
         var results=await Task.WhenAll(Confirm(),Confirm());Assert.Single(results,x=>x);await using var verify=CreateDb();Assert.Equal(1,await verify.ProductCostHistory.CountAsync());Assert.Equal(CostImportStatus.Applied,(await verify.CostImportJobs.SingleAsync()).Status);
     }
 
+    [Fact]
+    public async Task Concurrent_Financial_Confirm_Is_Applied_Exactly_Once_On_PostgreSql()
+    {
+        if(ConnectionString is null)return;await ResetDatabaseAsync();var jobId=Guid.NewGuid();await using(var setup=CreateDb()){await setup.Database.MigrateAsync();setup.Organizations.Add(new(){Id="org",Name="Org"});setup.FinancialImportJobs.Add(new(){Id=jobId,OrganizationId="org",CreatedByUserId="user",Type=FinancialImportType.Expenses,FileNameSafe="expenses.csv",TotalRows=1,ValidRows=1,ExpectedChanges=1});setup.FinancialImportRows.Add(new(){Id=Guid.NewGuid(),ImportJobId=jobId,RowNumber=2,Status="Valid",ExpenseType=ExpenseType.Other,Amount=100,Date=new(2026,8,1),Fingerprint="CONCURRENT-FINGERPRINT"});await setup.SaveChangesAsync();}
+        async Task<bool> Confirm(){await using var db=CreateDb();try{await new FinancialImportService(db).ConfirmAsync(jobId,"org","user",default);return true;}catch(FinancialImportException){return false;}}var results=await Task.WhenAll(Confirm(),Confirm());Assert.Single(results,x=>x);await using var verify=CreateDb();Assert.Equal(1,await verify.Expenses.CountAsync());Assert.Equal(FinancialImportStatus.Applied,(await verify.FinancialImportJobs.SingleAsync()).Status);
+    }
+
     private static ProductCostHistoryEntity Cost(Guid id)=>new(){Id=id,OrganizationId="pg-org",ProductId="pg-product",CostAmount=100,EffectiveFrom=new(2026,8,1),CreatedByUserId="user"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseNpgsql(ConnectionString!).Options);
     private static async Task ResetDatabaseAsync(){await using var connection=new NpgsqlConnection(ConnectionString);await connection.OpenAsync();await using var command=new NpgsqlCommand("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",connection);await command.ExecuteNonQueryAsync();}

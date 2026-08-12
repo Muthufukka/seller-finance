@@ -10,6 +10,7 @@
 5. GitHub Actions выполняет эти проверки при каждом push и pull request.
 
 Worker regression проверяет конкурентную обработку export jobs, восстановление stale export/Telegram leases и схему частичного уникального индекса активных Kaspi sync jobs. Идемпотентный migration script дополнительно проверяется на наличие lease-колонок, дедупликации существующих активных jobs и уникального индекса.
+Оба preview/confirm контура импорта используют атомарный claim в PostgreSQL. Security regression покрывает подмену расширения, бинарный CSV, формулы, повторяющиеся заголовки и cross-tenant ссылки; PostgreSQL integration одновременно подтверждает один финансовый preview из двух конкурирующих запросов ровно один раз.
 
 Режим `TEST_USE_INMEMORY` используется только вместе с окружением `Testing`. Production всегда требует `DATABASE_URL` и PostgreSQL.
 

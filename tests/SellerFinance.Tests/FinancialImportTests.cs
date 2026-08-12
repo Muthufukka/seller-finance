@@ -1,4 +1,5 @@
 using System.Text;
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using SellerFinance.Api;
@@ -43,6 +44,23 @@ public sealed class FinancialImportTests
         var foreign=await service.PreviewAsync(FinancialImportType.ActualFees,"other","user",File("OrderExternalId,LineExternalId,Amount\nORDER-1,LINE-1,500","fees.csv"),default);Assert.Equal(1,foreign.ErrorRows);
     }
 
+    [Fact]
+    public async Task Financial_Import_Rejects_Spoofed_Xlsx_Binary_Csv_And_Formulas()
+    {
+        await using var db=CreateDb();var service=new FinancialImportService(db);
+        var fake=File("Type,Amount,Date","expenses.xlsx");Assert.Contains("XLSX",(await Assert.ThrowsAsync<FinancialImportException>(()=>service.PreviewAsync(FinancialImportType.Expenses,"org","user",fake,default))).Message);
+        var binary=new FormFile(new MemoryStream([0x54,0x79,0x00,0x65]),0,4,"file","expenses.csv");Assert.Contains("бинарные",(await Assert.ThrowsAsync<FinancialImportException>(()=>service.PreviewAsync(FinancialImportType.Expenses,"org","user",binary,default))).Message);
+        await using var formula=Workbook(sheet=>{sheet.Cell("A1").Value="Type";sheet.Cell("B1").Value="Amount";sheet.Cell("C1").Value="Date";sheet.Cell("A2").FormulaA1="=\"Other\"";sheet.Cell("B2").Value=100;sheet.Cell("C2").Value="2026-08-01";});Assert.Contains("Формулы",(await Assert.ThrowsAsync<FinancialImportException>(()=>service.PreviewAsync(FinancialImportType.Expenses,"org","user",new FormFile(formula,0,formula.Length,"file","expenses.xlsx"),default))).Message);
+    }
+
+    [Fact]
+    public async Task Financial_Import_Rejects_Duplicate_Headers_And_Sanitizes_File_Name()
+    {
+        await using var db=CreateDb();var service=new FinancialImportService(db);await using var duplicate=Workbook(sheet=>{sheet.Cell("A1").Value="Type";sheet.Cell("B1").Value="type";sheet.Cell("C1").Value="Amount";sheet.Cell("D1").Value="Date";});Assert.Contains("Повторяющаяся",(await Assert.ThrowsAsync<FinancialImportException>(()=>service.PreviewAsync(FinancialImportType.Expenses,"org","user",new FormFile(duplicate,0,duplicate.Length,"file","expenses.xlsx"),default))).Message);
+        var job=await service.PreviewAsync(FinancialImportType.Expenses,"org","user",File("Type,Amount,Date\nOther,100,2026-08-01","../bad\u0001.csv"),default);Assert.Equal("bad.csv",job.FileNameSafe);
+    }
+
     private static FormFile File(string content,string name){var bytes=Encoding.UTF8.GetBytes(content);return new FormFile(new MemoryStream(bytes),0,bytes.Length,"file",name);}
+    private static MemoryStream Workbook(Action<IXLWorksheet> fill){var stream=new MemoryStream();using(var workbook=new XLWorkbook()){var sheet=workbook.AddWorksheet("Import");fill(sheet);workbook.SaveAs(stream);}stream.Position=0;return stream;}
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 }

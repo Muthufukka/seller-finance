@@ -1,9 +1,11 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.VisualBasic.FileIO;
+using Npgsql;
 
 namespace SellerFinance.Api;
 
@@ -13,6 +15,8 @@ public sealed class FinancialImportService(SellerFinanceDbContext db)
 {
     private const int MaxRows = 10_000;
     private const long MaxBytes = 5 * 1024 * 1024;
+    private const long MaxUncompressedXlsxBytes=25L*1024*1024;
+    private static readonly SemaphoreSlim NonRelationalConfirmLock=new(1,1);
 
     public async Task<FinancialImportJobEntity> PreviewAsync(FinancialImportType type,string tenant,string userId,IFormFile file,CancellationToken ct)
     {
@@ -21,12 +25,12 @@ public sealed class FinancialImportService(SellerFinanceDbContext db)
         if(extension is not ".csv" and not ".xlsx")throw new FinancialImportException("Поддерживаются только CSV и XLSX");
         await using var memory=new MemoryStream();await file.CopyToAsync(memory,ct);memory.Position=0;
         List<Dictionary<string,string>> raw;
-        try{raw=extension==".xlsx"?ReadXlsx(memory):ReadCsv(memory);}
+        try{ValidateSignature(memory,extension);raw=extension==".xlsx"?ReadXlsx(memory):ReadCsv(memory);}
         catch(FinancialImportException){throw;}
-        catch(Exception ex) when(ex is InvalidDataException or FormatException or ArgumentException){throw new FinancialImportException("Не удалось прочитать файл. Проверьте формат и заголовки колонок");}
+        catch(Exception ex) when(ex is not OperationCanceledException){throw new FinancialImportException("Не удалось прочитать файл. Проверьте формат и заголовки колонок");}
         if(raw.Count>MaxRows)throw new FinancialImportException($"В одном импорте допускается не более {MaxRows:N0} строк");
 
-        var job=new FinancialImportJobEntity{Id=Guid.NewGuid(),OrganizationId=tenant,CreatedByUserId=userId,Type=type,FileNameSafe=Path.GetFileName(file.FileName),TotalRows=raw.Count};
+        var job=new FinancialImportJobEntity{Id=Guid.NewGuid(),OrganizationId=tenant,CreatedByUserId=userId,Type=type,FileNameSafe=SafeFileName(file.FileName),TotalRows=raw.Count};
         if(type==FinancialImportType.Expenses)await BuildExpenseRows(job,raw,tenant,ct);else await BuildFeeRows(job,raw,tenant,ct);
         db.FinancialImportJobs.Add(job);await db.SaveChangesAsync(ct);return job;
     }
@@ -77,23 +81,31 @@ public sealed class FinancialImportService(SellerFinanceDbContext db)
 
     public async Task<int> ConfirmAsync(Guid jobId,string tenant,string userId,CancellationToken ct)
     {
-        await using var transaction=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
-        var job=await db.FinancialImportJobs.SingleOrDefaultAsync(x=>x.Id==jobId&&x.OrganizationId==tenant,ct)??throw new KeyNotFoundException();
-        if(job.Status!=FinancialImportStatus.Preview||job.ExpiresAt<=DateTimeOffset.UtcNow)throw new FinancialImportException("Preview уже применён или истёк");
-        var rows=await db.FinancialImportRows.Where(x=>x.ImportJobId==jobId&&(x.Status=="Valid"||x.Status=="Update")).ToArrayAsync(ct);
-        if(job.Type==FinancialImportType.Expenses)
-            foreach(var row in rows)db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,Type=row.ExpenseType!.Value,Amount=row.Amount!.Value,Date=row.Date!.Value,PeriodEnd=row.PeriodEnd,ProductId=row.ProductId,OrderId=row.OrderId,Comment=row.Comment,Source=ExpenseSource.Import,ImportJobId=job.Id,ImportFingerprint=row.Fingerprint,CreatedByUserId=userId});
-        else
-            foreach(var row in rows){var fee=await db.ActualFees.SingleOrDefaultAsync(x=>x.OrganizationId==tenant&&x.OrderLineId==row.OrderLineId,ct);if(fee is null)db.ActualFees.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,OrderLineId=row.OrderLineId!.Value,Amount=row.Amount!.Value,Source="Import",ImportJobId=job.Id,ExternalRef=row.ExternalRef,CreatedByUserId=userId});else{fee.Amount=row.Amount!.Value;fee.Source="Import";fee.ImportJobId=job.Id;fee.ExternalRef=row.ExternalRef;}}
-        job.Status=FinancialImportStatus.Applied;job.AppliedAt=DateTimeOffset.UtcNow;await db.SaveChangesAsync(ct);if(transaction is not null)await transaction.CommitAsync(ct);return rows.Length;
+        if(!db.Database.IsRelational())await NonRelationalConfirmLock.WaitAsync(ct);
+        try
+        {
+            await using var transaction=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+            if(!await db.FinancialImportJobs.AsNoTracking().AnyAsync(x=>x.Id==jobId&&x.OrganizationId==tenant,ct))throw new KeyNotFoundException();var now=DateTimeOffset.UtcNow;
+            var claimed=db.Database.IsRelational()?await db.FinancialImportJobs.Where(x=>x.Id==jobId&&x.OrganizationId==tenant&&x.Status==FinancialImportStatus.Preview&&x.ExpiresAt>now).ExecuteUpdateAsync(s=>s.SetProperty(x=>x.Status,FinancialImportStatus.Applied).SetProperty(x=>x.AppliedAt,now),ct):await ClaimNonRelationalAsync(jobId,tenant,now,ct);if(claimed!=1)throw new FinancialImportException("Preview уже применён или истёк");
+            var job=await db.FinancialImportJobs.AsNoTracking().SingleAsync(x=>x.Id==jobId&&x.OrganizationId==tenant,ct);var rows=await db.FinancialImportRows.AsNoTracking().Where(x=>x.ImportJobId==jobId&&(x.Status=="Valid"||x.Status=="Update")).ToArrayAsync(ct);
+            if(job.Type==FinancialImportType.Expenses)foreach(var row in rows)db.Expenses.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,Type=row.ExpenseType!.Value,Amount=row.Amount!.Value,Date=row.Date!.Value,PeriodEnd=row.PeriodEnd,ProductId=row.ProductId,OrderId=row.OrderId,Comment=row.Comment,Source=ExpenseSource.Import,ImportJobId=job.Id,ImportFingerprint=row.Fingerprint,CreatedByUserId=userId});
+            else foreach(var row in rows){var fee=await db.ActualFees.SingleOrDefaultAsync(x=>x.OrganizationId==tenant&&x.OrderLineId==row.OrderLineId,ct);if(fee is null)db.ActualFees.Add(new(){Id=Guid.NewGuid(),OrganizationId=tenant,OrderLineId=row.OrderLineId!.Value,Amount=row.Amount!.Value,Source="Import",ImportJobId=job.Id,ExternalRef=row.ExternalRef,CreatedByUserId=userId});else{fee.Amount=row.Amount!.Value;fee.Source="Import";fee.ImportJobId=job.Id;fee.ExternalRef=row.ExternalRef;}}
+            try{await db.SaveChangesAsync(ct);}catch(DbUpdateException ex)when(ex.InnerException is PostgresException{SqlState:PostgresErrorCodes.UniqueViolation}){throw new FinancialImportException("Финансовые данные изменились после preview. Создайте новый preview");}if(transaction is not null)await transaction.CommitAsync(ct);return rows.Length;
+        }
+        finally{if(!db.Database.IsRelational())NonRelationalConfirmLock.Release();}
     }
 
     public static object ToPreview(FinancialImportJobEntity job,IEnumerable<FinancialImportRowEntity> rows)=>new{job.Id,type=job.Type.ToString(),status=job.Status.ToString(),job.TotalRows,job.ValidRows,job.UpdateRows,job.DuplicateRows,job.ErrorRows,job.ExpectedChanges,job.ExpiresAt,rows=rows.Select(x=>new{x.RowNumber,x.Status,x.Error,type=x.ExpenseType?.ToString(),x.Amount,x.Date,x.PeriodEnd,x.ProductId,x.OrderId,x.OrderLineId,x.Comment,x.ExternalRef})};
 
     private void Add(FinancialImportJobEntity job,FinancialImportRowEntity row){db.FinancialImportRows.Add(row);switch(row.Status){case "Valid":job.ValidRows++;job.ExpectedChanges++;break;case "Update":job.UpdateRows++;job.ExpectedChanges++;break;case "Duplicate":job.DuplicateRows++;break;default:job.ErrorRows++;break;}}
     private static void Require(List<Dictionary<string,string>> rows,params string[] names){if(rows.Count==0)throw new FinancialImportException("Файл не содержит строк");foreach(var name in names)if(!rows[0].ContainsKey(Normalize(name)))throw new FinancialImportException($"Нет обязательной колонки: {name}");}
-    private static List<Dictionary<string,string>> ReadXlsx(Stream stream){using var book=new XLWorkbook(stream);var range=book.Worksheets.First().RangeUsed()??throw new FinancialImportException("Файл пуст");var headers=range.FirstRow().Cells().Select((c,i)=>(Normalize(c.GetString()),i+1)).ToArray();return range.RowsUsed().Skip(1).Where(x=>!x.IsEmpty()).Select(row=>headers.ToDictionary(x=>x.Item1,x=>row.Cell(x.Item2).GetFormattedString(),StringComparer.OrdinalIgnoreCase)).ToList();}
-    private static List<Dictionary<string,string>> ReadCsv(Stream stream){stream.Position=0;using var reader=new StreamReader(stream,Encoding.UTF8,true,leaveOpen:true);var first=reader.ReadLine()??throw new FinancialImportException("Файл пуст");stream.Position=0;reader.DiscardBufferedData();using var parser=new TextFieldParser(stream,Encoding.UTF8,true){TextFieldType=FieldType.Delimited,HasFieldsEnclosedInQuotes=true};parser.SetDelimiters(first.Count(x=>x==';')>=first.Count(x=>x==',')?";":",");var headers=(parser.ReadFields()??[]).Select(Normalize).ToArray();var result=new List<Dictionary<string,string>>();while(!parser.EndOfData){var values=parser.ReadFields()??[];if(values.All(String.IsNullOrWhiteSpace))continue;result.Add(headers.Select((h,i)=>(h,i<values.Length?values[i]:"")).ToDictionary(x=>x.h,x=>x.Item2,StringComparer.OrdinalIgnoreCase));}return result;}
+    private async Task<int> ClaimNonRelationalAsync(Guid jobId,string tenant,DateTimeOffset now,CancellationToken ct){var job=await db.FinancialImportJobs.SingleOrDefaultAsync(x=>x.Id==jobId&&x.OrganizationId==tenant,ct);if(job is null||job.Status!=FinancialImportStatus.Preview||job.ExpiresAt<=now)return 0;job.Status=FinancialImportStatus.Applied;job.AppliedAt=now;return 1;}
+    private static List<Dictionary<string,string>> ReadXlsx(Stream stream){ValidateXlsxArchive(stream);stream.Position=0;using var book=new XLWorkbook(stream);var sheet=book.Worksheets.FirstOrDefault()??throw new FinancialImportException("Файл не содержит листов");var range=sheet.RangeUsed()??throw new FinancialImportException("Файл пуст");if(range.RowCount()>MaxRows+1||range.ColumnCount()>100)throw new FinancialImportException("Лист превышает лимит 10 000 строк или 100 колонок");if(range.CellsUsed().Any(x=>x.HasFormula))throw new FinancialImportException("Формулы в файле импорта не поддерживаются");var headers=Headers(range.FirstRow().Cells().Select((c,i)=>(c.GetString(),i+1)));return range.RowsUsed().Skip(1).Where(x=>!x.IsEmpty()).Select(row=>headers.ToDictionary(x=>x.Name,x=>row.Cell(x.Index).GetFormattedString(),StringComparer.OrdinalIgnoreCase)).ToList();}
+    private static List<Dictionary<string,string>> ReadCsv(Stream stream){stream.Position=0;using var reader=new StreamReader(stream,Encoding.UTF8,true,leaveOpen:true);var first=reader.ReadLine()??throw new FinancialImportException("Файл пуст");stream.Position=0;reader.DiscardBufferedData();using var parser=new TextFieldParser(stream,Encoding.UTF8,true){TextFieldType=FieldType.Delimited,HasFieldsEnclosedInQuotes=true};parser.SetDelimiters(first.Count(x=>x==';')>=first.Count(x=>x==',')?";":",");var headers=Headers((parser.ReadFields()??[]).Select((x,i)=>(x,i)));var result=new List<Dictionary<string,string>>();try{while(!parser.EndOfData){var values=parser.ReadFields()??[];if(values.All(String.IsNullOrWhiteSpace))continue;if(result.Count==MaxRows)throw new FinancialImportException("В одном импорте допускается не более 10 000 строк");result.Add(headers.ToDictionary(x=>x.Name,x=>x.Index<values.Length?values[x.Index]:"",StringComparer.OrdinalIgnoreCase));}}catch(MalformedLineException){throw new FinancialImportException($"Некорректная CSV-строка {result.Count+2}");}return result;}
+    private static (string Name,int Index)[] Headers(IEnumerable<(string Name,int Index)> source){var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var result=new List<(string,int)>();foreach(var (name,index) in source){var normalized=Normalize(name);if(String.IsNullOrWhiteSpace(normalized))continue;if(!seen.Add(normalized))throw new FinancialImportException($"Повторяющаяся колонка: {name.Trim()}");result.Add((normalized,index));}return result.ToArray();}
+    private static void ValidateSignature(Stream stream,string extension){Span<byte> prefix=stackalloc byte[4];var read=stream.Read(prefix);stream.Position=0;if(extension==".xlsx"&&(read<4||prefix[0]!=0x50||prefix[1]!=0x4B||prefix[2]!=0x03||prefix[3]!=0x04))throw new FinancialImportException("Содержимое файла не соответствует формату XLSX");if(extension==".csv"&&prefix[..read].Contains((byte)0))throw new FinancialImportException("CSV содержит недопустимые бинарные данные");}
+    private static void ValidateXlsxArchive(Stream stream){stream.Position=0;using var archive=new ZipArchive(stream,ZipArchiveMode.Read,true);long total=0;foreach(var entry in archive.Entries){if(entry.Length>MaxUncompressedXlsxBytes||total>MaxUncompressedXlsxBytes-entry.Length)throw new FinancialImportException("Распакованный XLSX превышает лимит 25 МБ");total+=entry.Length;}if(!archive.Entries.Any(x=>x.FullName.Equals("[Content_Types].xml",StringComparison.OrdinalIgnoreCase)))throw new FinancialImportException("Некорректная структура XLSX");}
+    private static string SafeFileName(string value){var normalized=value.Replace('\\','/');var name=normalized[(normalized.LastIndexOf('/')+1)..];name=new String(name.Where(x=>!Char.IsControl(x)).ToArray()).Trim();if(String.IsNullOrWhiteSpace(name))return "import";return name.Length<=255?name:name[..255];}
     private static string Get(Dictionary<string,string> row,params string[] names){foreach(var name in names)if(row.TryGetValue(Normalize(name),out var value))return value.Trim();return "";}
     private static string? Null(string value)=>String.IsNullOrWhiteSpace(value)?null:value.Trim();
     private static string Normalize(string value)=>new(value.Trim().ToLowerInvariant().Where(Char.IsLetterOrDigit).ToArray());
