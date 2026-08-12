@@ -132,7 +132,7 @@ api.MapGet("/session", async (HttpContext ctx, SellerFinanceDbContext db) =>
 {
     var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==ctx.Tenant());
     var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==ctx.User.FindFirstValue(ClaimTypes.NameIdentifier));
-    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name,organization.TimeZone,organization.Currency, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
+    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name,organization.TimeZone,organization.Currency,organization.AllocateOrganizationExpenses, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
 });
 api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext db) =>
 {
@@ -141,11 +141,11 @@ api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext
 });
 api.MapPut("/organizations/{id}",async(HttpContext ctx,string id,OrganizationSettingsRequest request,SellerFinanceDbContext db,CancellationToken ct)=>
 {
-    var result=await OrganizationSettings.UpdateAsync(db,id,ctx.Membership(),request.Name,request.TimeZone,request.Currency,ct);
+    var result=await OrganizationSettings.UpdateAsync(db,id,ctx.Membership(),request.Name,request.TimeZone,request.Currency,request.AllocateOrganizationExpenses,ct);
     if(result.Failure==OrganizationSettingsFailure.NotFound)return Results.NotFound();
     if(result.Failure==OrganizationSettingsFailure.Forbidden)return Results.Forbid();
     if(result.Failure!=OrganizationSettingsFailure.None)return Results.BadRequest(new{title=result.Failure switch{OrganizationSettingsFailure.InvalidName=>"Название должно содержать от 2 до 120 символов",OrganizationSettingsFailure.InvalidTimeZone=>"Неизвестный часовой пояс IANA",_=>"В MVP поддерживается валюта KZT"}});
-    AuditWriter.Add(db,ctx,"organization.settings.changed","Organization",id,JsonSerializer.Serialize(new{result.Organization!.Name,result.Organization.TimeZone,result.Organization.Currency}));await db.SaveChangesAsync(ct);return Results.Ok(new{result.Organization.Name,result.Organization.TimeZone,result.Organization.Currency});
+    AuditWriter.Add(db,ctx,"organization.settings.changed","Organization",id,JsonSerializer.Serialize(new{result.Organization!.Name,result.Organization.TimeZone,result.Organization.Currency,result.Organization.AllocateOrganizationExpenses}));await db.SaveChangesAsync(ct);return Results.Ok(new{result.Organization.Name,result.Organization.TimeZone,result.Organization.Currency,result.Organization.AllocateOrganizationExpenses});
 }).RequireRateLimiting("sensitive");
 api.MapDelete("/organizations/{id}",OrganizationEndpoints.DeleteAsync).RequireRateLimiting("sensitive");
 api.MapGet("/organizations/{id}/members",async(HttpContext ctx,string id,SellerFinanceDbContext db)=>id!=ctx.Tenant()?Results.NotFound():Results.Ok(await(from m in db.OrganizationUsers.AsNoTracking() join u in db.Users on m.UserId equals u.Id where m.OrganizationId==id&&m.JoinedAt!=null select new{u.Id,u.Email,u.DisplayName,role=m.Role.ToString(),m.JoinedAt}).ToArrayAsync()));
@@ -321,7 +321,7 @@ record LoginRequest(string Email,string Password,bool RememberMe=true);
 record ForgotPasswordRequest(string Email);
 record ResetPasswordRequest(string Email,string Token,string NewPassword);
 record InviteMemberRequest(string Email,string Role);
-record OrganizationSettingsRequest(string Name,string TimeZone,string Currency);
+record OrganizationSettingsRequest(string Name,string TimeZone,string Currency,bool AllocateOrganizationExpenses=false);
 record AcceptInvitationRequest(string Token);
 record ProductCostRequest(decimal Cost,DateOnly? EffectiveFrom);
 record KaspiConnectionRequest(string Token,string? DisplayName=null);

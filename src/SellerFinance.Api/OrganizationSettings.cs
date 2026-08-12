@@ -17,6 +17,7 @@ public static class OrganizationSettings
         string name,
         string timeZone,
         string currency,
+        bool allocateOrganizationExpenses=false,
         CancellationToken ct = default)
     {
         if (membership.OrganizationId != organizationId || membership.Role is not (OrganizationRole.Owner or OrganizationRole.Admin))
@@ -36,6 +37,7 @@ public static class OrganizationSettings
         organization.Name = name;
         organization.TimeZone = timeZone;
         organization.Currency = currency;
+        organization.AllocateOrganizationExpenses = allocateOrganizationExpenses;
         return new(OrganizationSettingsFailure.None, organization);
     }
 }

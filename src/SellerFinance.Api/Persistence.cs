@@ -422,6 +422,7 @@ public sealed class OrganizationEntity
     public string Name { get; set; } = "";
     public string TimeZone { get; set; } = "Asia/Almaty";
     public string Currency { get; set; } = "KZT";
+    public bool AllocateOrganizationExpenses { get; set; }
     public string Status { get; set; } = "Active";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
@@ -552,7 +553,7 @@ public static class DbAnalytics
         var facts = await FactsAsync(db, tenant,from,to,completeCostsOnly);
         var expenses=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&(!from.HasValue||x.Date>=from)&&(!to.HasValue||x.Date<=to)).SumAsync(x=>(decimal?)x.Amount)??0m;
         var result = FinanceCalculator.Calculate(facts, expenses);
-        return new { result.Revenue, orders=facts.Count(x=>x.Status==OrderStatus.Completed), units=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).Sum(x=>x.Quantity), result.Cogs, result.GrossProfit, result.MarketplaceFees, result.Delivery, result.OperatingProfit, result.OperatingMarginPct, result.CoveragePct, result.IsPreliminary };
+        return new { result.Revenue, orders=facts.Count(x=>x.Status==OrderStatus.Completed), units=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).Sum(x=>x.Quantity), result.Cogs, result.GrossProfit, result.MarketplaceFees, result.Delivery, result.OperatingExpenses, result.OperatingProfit, result.OperatingMarginPct, result.CoveragePct, result.IsPreliminary };
     }
 
     public static async Task<object[]> TimeSeriesAsync(SellerFinanceDbContext db, string tenant,DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
@@ -590,6 +591,7 @@ public static class DbAnalytics
         var facts = await FactsAsync(db, tenant,from,to,completeCostsOnly);
         var productExpenses=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId!=null&&(!from.HasValue||x.Date>=from)&&(!to.HasValue||x.Date<=to)).GroupBy(x=>x.ProductId!).Select(g=>new{ProductId=g.Key,Amount=g.Sum(x=>x.Amount)}).ToDictionaryAsync(x=>x.ProductId,x=>x.Amount);
         var lines = facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).ToArray();
+        var allocate=await db.Organizations.AsNoTracking().Where(x=>x.Id==tenant).Select(x=>x.AllocateOrganizationExpenses).SingleOrDefaultAsync();var allocatedExpenses=allocate?await AllocateOrganizationExpensesAsync(db,tenant,lines,from,to):[];
         return products.Select(p=>
         {
             var own=lines.Where(x=>x.ProductId==p.Id).ToArray();
@@ -597,17 +599,17 @@ public static class DbAnalytics
             var complete=own.All(x=>x.UnitCost.HasValue);
             var cogs=complete ? own.Sum(x=>x.UnitCost!.Value*x.Quantity) : (decimal?)null;
             var costs=own.Sum(x=>(x.ActualFee ?? Decimal.Round(x.Revenue*x.FeeRate,4))+x.Delivery+x.OtherVariableCosts);
-            var profit=cogs.HasValue ? revenue-cogs.Value-costs-productExpenses.GetValueOrDefault(p.Id) : (decimal?)null;
+            var directExpenses=productExpenses.GetValueOrDefault(p.Id);var allocatedOrganizationExpenses=allocatedExpenses.GetValueOrDefault(p.Id);var profit=cogs.HasValue ? revenue-cogs.Value-costs-directExpenses-allocatedOrganizationExpenses : (decimal?)null;
             var margin=profit.HasValue&&revenue!=0 ? Decimal.Round(profit.Value/revenue*100m,1) : (decimal?)null;
             var current=histories.Where(x=>x.ProductId==p.Id&&x.EffectiveFrom<=DateOnly.FromDateTime(DateTime.UtcNow)).OrderByDescending(x=>x.EffectiveFrom).FirstOrDefault()?.CostAmount;
-            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, p.Category, p.ExternalProductId, productStatus=p.Status, units=own.Sum(x=>x.Quantity), revenue, cogs, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=p.Status=="Archived"?"archived":current.HasValue?"profitable":"missing-cost" };
+            return (object)new { id=p.Id, sku=p.Sku, name=p.Name, p.Category, p.ExternalProductId, productStatus=p.Status, units=own.Sum(x=>x.Quantity), revenue, cogs, directExpenses, allocatedOrganizationExpenses, profit, margin, cost=current, coveragePct=revenue==0?100m:Decimal.Round(own.Where(x=>x.UnitCost.HasValue).Sum(x=>x.Revenue)/revenue*100m,2), status=p.Status=="Archived"?"archived":current.HasValue?"profitable":"missing-cost" };
         }).ToArray();
     }
 
     public static async Task<object[]> AbcAsync(SellerFinanceDbContext db,string tenant,string metric="profit",DateOnly? from=null,DateOnly? to=null,bool completeCostsOnly=false)
     {
         var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);var expenses=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId!=null&&(!from.HasValue||x.Date>=from)&&(!to.HasValue||x.Date<=to)).GroupBy(x=>x.ProductId!).Select(g=>new{ProductId=g.Key,Amount=g.Sum(x=>x.Amount)}).ToDictionaryAsync(x=>x.ProductId,x=>x.Amount);
-        var facts=await FactsAsync(db,tenant,from,to,completeCostsOnly);var values=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).GroupBy(x=>x.ProductId).Select(g=>{var finance=FinanceCalculator.Calculate([new OrderFact("abc",tenant,OrderStatus.Completed,from??DateOnly.MinValue,g.ToArray())],expenses.GetValueOrDefault(g.Key));var value=metric switch{"revenue"=>finance.Revenue,"units"=>g.Sum(x=>x.Quantity),"grossProfit"=>finance.GrossProfit,_=>finance.OperatingProfit};return new{ProductId=g.Key,Value=value,Revenue=finance.Revenue,Profit=finance.OperatingProfit,Units=g.Sum(x=>x.Quantity)};}).OrderByDescending(x=>x.Value).ToArray();
+        var facts=await FactsAsync(db,tenant,from,to,completeCostsOnly);var allLines=facts.Where(x=>x.Status==OrderStatus.Completed).SelectMany(x=>x.Lines).ToArray();var allocate=await db.Organizations.AsNoTracking().Where(x=>x.Id==tenant).Select(x=>x.AllocateOrganizationExpenses).SingleOrDefaultAsync();var allocations=allocate?await AllocateOrganizationExpensesAsync(db,tenant,allLines,from,to):[];var values=allLines.GroupBy(x=>x.ProductId).Select(g=>{var finance=FinanceCalculator.Calculate([new OrderFact("abc",tenant,OrderStatus.Completed,from??DateOnly.MinValue,g.ToArray())],expenses.GetValueOrDefault(g.Key)+allocations.GetValueOrDefault(g.Key));var value=metric switch{"revenue"=>finance.Revenue,"units"=>g.Sum(x=>x.Quantity),"grossProfit"=>finance.GrossProfit,_=>finance.OperatingProfit};return new{ProductId=g.Key,Value=value,Revenue=finance.Revenue,Profit=finance.OperatingProfit,Units=g.Sum(x=>x.Quantity)};}).OrderByDescending(x=>x.Value).ToArray();
         var total=values.Where(x=>x.Value>0).Sum(x=>x.Value);decimal cumulative=0;return values.Select(x=>{if(x.Value>0)cumulative+=x.Value;var share=total==0?0:Decimal.Round(cumulative/total*100m,2);var group=share<=80?"A":share<=95?"B":"C";products.TryGetValue(x.ProductId,out var p);return(object)new{productId=x.ProductId,sku=p?.Sku??x.ProductId,name=p?.Name??"Несопоставленный товар",x.Value,x.Revenue,x.Profit,x.Units,cumulativePct=share,group};}).ToArray();
     }
 
@@ -625,5 +627,12 @@ public static class DbAnalytics
         var actualFees=await db.ActualFees.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.OrderLineId,x=>x.Amount);
         var rules=await db.FeeRules.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToArrayAsync();var products=await db.Products.AsNoTracking().Where(x=>x.OrganizationId==tenant).ToDictionaryAsync(x=>x.Id);
         return orders.Select(x=>{var calculationDate=x.CompletionDate??x.Date;var lines=x.Lines.Select(y=>{products.TryGetValue(y.ProductId,out var product);var rule=rules.Where(r=>r.EffectiveFrom<=calculationDate&&(!r.EffectiveTo.HasValue||r.EffectiveTo>=calculationDate)&&(r.Scope==FeeRuleScope.Default||r.Scope==FeeRuleScope.Product&&r.ProductId==y.ProductId||r.Scope==FeeRuleScope.Category&&r.Category==product?.Category)).OrderByDescending(r=>r.Scope).ThenByDescending(r=>r.EffectiveFrom).FirstOrDefault();decimal? actual=actualFees.TryGetValue(y.Id,out var imported)?imported:y.ActualFee;var rate=y.FeeRate;if(actual is null&&rule is not null){if(rule.ValueType==FeeValueType.Fixed)actual=rule.Value;else rate=rule.Value/100m;}return new OrderLine(y.ProductId,y.Revenue,y.Quantity,costs.FirstOrDefault(c=>c.ProductId==y.ProductId&&c.EffectiveFrom<=calculationDate)?.CostAmount,actual,rate,y.Delivery,y.OtherVariableCosts);}).ToArray();if(completeCostsOnly)lines=lines.Where(y=>y.UnitCost.HasValue).ToArray();return new OrderFact(x.Id,x.OrganizationId,x.Status,calculationDate,lines);}).Where(x=>!completeCostsOnly||x.Lines.Count>0).ToArray();
+    }
+
+    private static async Task<Dictionary<string,decimal>> AllocateOrganizationExpensesAsync(SellerFinanceDbContext db,string tenant,IReadOnlyList<OrderLine> lines,DateOnly? from,DateOnly? to)
+    {
+        var total=await db.Expenses.AsNoTracking().Where(x=>x.OrganizationId==tenant&&x.ProductId==null&&x.OrderId==null&&(!from.HasValue||x.Date>=from)&&(!to.HasValue||x.Date<=to)).SumAsync(x=>(decimal?)x.Amount)??0m;
+        var revenues=lines.GroupBy(x=>x.ProductId).Select(x=>new{ProductId=x.Key,Revenue=x.Sum(y=>y.Revenue)}).Where(x=>x.Revenue>0).OrderBy(x=>x.ProductId).ToArray();if(total==0||revenues.Length==0)return [];
+        var allocated=FinanceCalculator.AllocateByRevenue(total,revenues.Select(x=>x.Revenue).ToArray());return revenues.Select((x,index)=>(x.ProductId,Amount:allocated[index])).ToDictionary(x=>x.ProductId,x=>x.Amount);
     }
 }

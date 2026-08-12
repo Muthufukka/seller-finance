@@ -9,8 +9,8 @@ public sealed class OrganizationSettingsTests
     public async Task Owner_Can_Update_Name_And_TimeZone()
     {
         await using var db=CreateDb();db.Organizations.Add(new(){Id="org",Name="Old"});await db.SaveChangesAsync();
-        var result=await OrganizationSettings.UpdateAsync(db,"org",new("org",OrganizationRole.Owner),"Aspan Shop","Asia/Qyzylorda","kzt");
-        Assert.Equal(OrganizationSettingsFailure.None,result.Failure);Assert.Equal("Aspan Shop",result.Organization!.Name);Assert.Equal("Asia/Qyzylorda",result.Organization.TimeZone);Assert.Equal("KZT",result.Organization.Currency);
+        var result=await OrganizationSettings.UpdateAsync(db,"org",new("org",OrganizationRole.Owner),"Aspan Shop","Asia/Qyzylorda","kzt",true);
+        Assert.Equal(OrganizationSettingsFailure.None,result.Failure);Assert.Equal("Aspan Shop",result.Organization!.Name);Assert.Equal("Asia/Qyzylorda",result.Organization.TimeZone);Assert.Equal("KZT",result.Organization.Currency);Assert.True(result.Organization.AllocateOrganizationExpenses);
     }
 
     [Theory]

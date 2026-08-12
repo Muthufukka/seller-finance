@@ -13,6 +13,7 @@ type Summary = {
   grossProfit: number;
   marketplaceFees: number;
   delivery: number;
+  operatingExpenses: number;
   operatingProfit: number;
   operatingMarginPct: number | null;
   coveragePct: number;
@@ -29,6 +30,8 @@ type Product = {
   margin: number | null;
   cost: number | null;
   coveragePct?: number;
+  directExpenses?: number;
+  allocatedOrganizationExpenses?: number;
   status: string;
 };
 type Point = { date: string; revenue: number; profit: number };
@@ -41,6 +44,7 @@ type Session = {
   organizationName: string;
   timeZone: string;
   currency: string;
+  allocateOrganizationExpenses: boolean;
   role: string;
   plan: string;
   trialEndsAt?: string;
@@ -69,6 +73,7 @@ const fallback: { summary: Summary; products: Product[]; timeseries: Point[] } =
     grossProfit: 83835,
     marketplaceFees: 17798,
     delivery: 3850,
+    operatingExpenses: 2500,
     operatingProfit: 49687,
     operatingMarginPct: 28.58,
     coveragePct: 92.53,
@@ -537,6 +542,7 @@ function Dashboard({ summary, products, points, loading, period, onPeriod, custo
       <div className="kpis">
         <Kpi label="Выручка" value={money(summary.revenue)} delta="+12,4%" good />
         <Kpi label="Операционная прибыль" value={money(summary.operatingProfit)} delta="+8,7%" good />
+        <Kpi label="Расходы периода" value={money(summary.operatingExpenses)} sub="Прямые и общеорганизационные" />
         <Kpi label="Маржинальность" value={pct(summary.operatingMarginPct)} delta="−1,2 п.п." />
         <Kpi label="Заказы" value={String(summary.orders)} sub={`${summary.units} единиц`} />
       </div>
@@ -1076,6 +1082,7 @@ function Abc({ session, completeCostsOnly, dateFrom, dateTo }: { session: Sessio
                 <th>Товар</th>
                 <th>Значение</th>
                 <th>Выручка</th>
+                <th>Расходы</th>
                 <th>Прибыль</th>
                 <th>Накопительно</th>
               </tr>
@@ -1542,6 +1549,7 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
         name: f.get("name"),
         timeZone: f.get("timeZone"),
         currency: "KZT",
+        allocateOrganizationExpenses: f.get("allocateOrganizationExpenses") === "on",
       }),
     });
     const data = await r.json().catch(() => null);
@@ -1551,6 +1559,7 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
         organizationName: data.name,
         timeZone: data.timeZone,
         currency: data.currency,
+        allocateOrganizationExpenses: data.allocateOrganizationExpenses,
       });
       setMessage("Настройки организации сохранены");
     } else setMessage(data?.title || "Не удалось сохранить настройки");
@@ -1612,6 +1621,11 @@ function SettingsPage({ session, onSession, onDeleted }: { session: Session; onS
             <label>
               Валюта
               <input value="KZT" disabled />
+            </label>
+            <label className="allocation-setting">
+              <input name="allocateOrganizationExpenses" type="checkbox" defaultChecked={session.allocateOrganizationExpenses} disabled={!canManage} />
+              Распределять общеорганизационные расходы по выручке товаров
+              <small>Общий результат не изменится. Настройка влияет только на прибыльность товаров и ABC.</small>
             </label>
             {canManage && <button className="primary">Сохранить</button>}
           </form>
@@ -1898,6 +1912,7 @@ function Products({ products, session }: { products: Product[]; session: Session
                   </td>
                   <td>{p.units}</td>
                   <td>{money(p.revenue)}</td>
+                  <td title={`Прямые: ${money(p.directExpenses ?? 0)}; распределённые: ${money(p.allocatedOrganizationExpenses ?? 0)}`}>{money((p.directExpenses ?? 0) + (p.allocatedOrganizationExpenses ?? 0))}</td>
                   <td>{money(p.profit)}</td>
                   <td>{pct(p.margin)}</td>
                   <td>{pct(p.coveragePct ?? (p.cost === null ? 0 : 100))}</td>
