@@ -12,6 +12,22 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: seller_finance_tests
+          POSTGRES_USER: seller_finance
+          POSTGRES_PASSWORD: integration-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seller_finance -d seller_finance_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_CONNECTION: Host=localhost;Port=5432;Database=seller_finance_tests;Username=seller_finance;Password=integration-test-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v5

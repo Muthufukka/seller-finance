@@ -6,6 +6,7 @@
 2. API E2E поднимает полное ASP.NET Core приложение в окружении `Testing` на отдельной InMemory БД. Основной acceptance-сценарий проходит регистрацию, cookie-сессию, проверку и шифрование Kaspi token на обезличенном JSON:API fixture, sync worker, CSV preview/confirm себестоимости, dashboard с полной Coverage, background export и скачивание по временной ссылке. Дополнительные сценарии проверяют настройки организации, расходы, роли, cross-tenant отказ и удаление данных.
 3. `pnpm build` проверяет TypeScript и production bundle React.
 4. `dotnet ef migrations script --idempotent` проверяет построение полного PostgreSQL migration script.
+5. CI поднимает чистый PostgreSQL 17, применяет всю цепочку миграций и проверяет реальные unique constraints и атомарное подтверждение импорта себестоимости. Локально эти тесты включаются переменной `TEST_POSTGRES_CONNECTION` и должны указывать только на одноразовую тестовую БД: тест очищает схему `public`.
 5. GitHub Actions выполняет эти проверки при каждом push и pull request.
 
 Worker regression проверяет конкурентную обработку export jobs, восстановление stale export/Telegram leases и схему частичного уникального индекса активных Kaspi sync jobs. Идемпотентный migration script дополнительно проверяется на наличие lease-колонок, дедупликации существующих активных jobs и уникального индекса.

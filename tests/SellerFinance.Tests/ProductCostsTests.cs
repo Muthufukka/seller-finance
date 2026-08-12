@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using SellerFinance.Api;
@@ -103,6 +104,36 @@ public sealed class ProductCostsTests
         var job=await new CostImportService(db).PreviewAsync("org","user",new FormFile(stream,0,stream.Length,"file","costs.csv"),CancellationToken.None);
         Assert.Equal(1,job.DuplicateRows);Assert.Equal(1,job.ExpectedChanges);
     }
+
+    [Fact]
+    public async Task Import_Rejects_Spoofed_Xlsx_And_Binary_Csv()
+    {
+        await using var db=CreateDb();var service=new CostImportService(db);
+        await using var fakeXlsx=new MemoryStream(Encoding.UTF8.GetBytes("sku,cost,effectiveFrom"));
+        var xlsx=await Assert.ThrowsAsync<CostImportException>(()=>service.PreviewAsync("org","user",new FormFile(fakeXlsx,0,fakeXlsx.Length,"file","costs.xlsx"),default));Assert.Contains("XLSX",xlsx.Message);
+        await using var binaryCsv=new MemoryStream([0x73,0x6b,0x75,0x00,0x2c]);
+        var csv=await Assert.ThrowsAsync<CostImportException>(()=>service.PreviewAsync("org","user",new FormFile(binaryCsv,0,binaryCsv.Length,"file","costs.csv"),default));Assert.Contains("бинарные",csv.Message);
+    }
+
+    [Fact]
+    public async Task Xlsx_Import_Rejects_Formulas_And_Duplicate_Headers()
+    {
+        await using var db=CreateDb();var service=new CostImportService(db);
+        await using var formula=Workbook(sheet=>{sheet.Cell("A1").Value="sku";sheet.Cell("B1").Value="cost";sheet.Cell("C1").Value="effectiveFrom";sheet.Cell("A2").FormulaA1="=\"SKU-1\"";sheet.Cell("B2").Value=100;sheet.Cell("C2").Value="2026-08-01";});
+        var formulaError=await Assert.ThrowsAsync<CostImportException>(()=>service.PreviewAsync("org","user",new FormFile(formula,0,formula.Length,"file","costs.xlsx"),default));Assert.Contains("Формулы",formulaError.Message);
+        await using var duplicate=Workbook(sheet=>{sheet.Cell("A1").Value="sku";sheet.Cell("B1").Value="SKU";sheet.Cell("C1").Value="cost";sheet.Cell("D1").Value="effectiveFrom";});
+        var duplicateError=await Assert.ThrowsAsync<CostImportException>(()=>service.PreviewAsync("org","user",new FormFile(duplicate,0,duplicate.Length,"file","costs.xlsx"),default));Assert.Contains("Повторяющаяся",duplicateError.Message);
+    }
+
+    [Fact]
+    public async Task Import_Sanitizes_File_Name_And_Rejects_Overlong_Sku()
+    {
+        await using var db=CreateDb();var sku=new String('S',201);await using var stream=new MemoryStream(Encoding.UTF8.GetBytes($"sku,cost,effectiveFrom\n{sku},100,2026-08-01"));
+        var job=await new CostImportService(db).PreviewAsync("org","user",new FormFile(stream,0,stream.Length,"file","../bad\u0001.csv"),default);
+        Assert.Equal("bad.csv",job.FileNameSafe);Assert.Equal(1,job.ErrorRows);
+    }
+
+    private static MemoryStream Workbook(Action<IXLWorksheet> fill){var stream=new MemoryStream();using(var workbook=new XLWorkbook()){var sheet=workbook.AddWorksheet("Costs");fill(sheet);workbook.SaveAs(stream);}stream.Position=0;return stream;}
 
     private static ProductCostHistoryEntity Cost(decimal amount,DateOnly date)=>new(){Id=Guid.NewGuid(),OrganizationId="org",ProductId="p1",CostAmount=amount,EffectiveFrom=date,Source=CostSource.Manual,CreatedByUserId="user"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
