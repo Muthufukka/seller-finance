@@ -81,7 +81,7 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     public async Task Health_And_Protected_Routes_Start_Successfully()
     {
         using var client=factory.CreateClient(new(){AllowAutoRedirect=false});
-        Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health")).StatusCode);
+        var health=await client.GetAsync("/health");Assert.Equal(HttpStatusCode.OK,health.StatusCode);Assert.Equal("DENY",health.Headers.GetValues("X-Frame-Options").Single());Assert.Contains("frame-ancestors 'none'",health.Headers.GetValues("Content-Security-Policy").Single());Assert.Contains("object-src 'none'",health.Headers.GetValues("Content-Security-Policy").Single());Assert.Contains("camera=()",health.Headers.GetValues("Permissions-Policy").Single());
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/database")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/ready")).StatusCode);
         var docs=await client.GetStringAsync("/api-docs");Assert.Contains("/openapi/v1.json",docs);var openApi=await client.GetFromJsonAsync<JsonElement>("/openapi/v1.json");Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/products",out _));Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/exports",out _));
