@@ -4,9 +4,29 @@ namespace SellerFinance.Api;
 
 public enum SyncRetryFailure { None, NotFound, NotRetryable, OrganizationDisabled, AlreadyRunning }
 public sealed record SyncRetryResult(SyncJobEntity? Job,SyncRetryFailure Failure);
+public enum SubscriptionStatusChangeFailure { None, NotFound, InvalidTransition, PeriodExpired }
+public sealed record SubscriptionStatusChangeResult(SubscriptionEntity? Subscription,SubscriptionStatusChangeFailure Failure,SubscriptionStatus? PreviousStatus=null);
 
 public static class SaasAdminOperations
 {
+    public static async Task<SubscriptionStatusChangeResult> ChangeSubscriptionStatusAsync(SellerFinanceDbContext db,string organizationId,bool suspend,CancellationToken ct=default)
+    {
+        var subscription=await db.Subscriptions.SingleOrDefaultAsync(x=>x.OrganizationId==organizationId,ct);if(subscription is null)return new(null,SubscriptionStatusChangeFailure.NotFound);
+        var previous=subscription.Status;
+        if(suspend)
+        {
+            if(previous is not(SubscriptionStatus.Active or SubscriptionStatus.Trialing))return new(subscription,SubscriptionStatusChangeFailure.InvalidTransition,previous);
+            subscription.Status=SubscriptionStatus.Suspended;
+        }
+        else
+        {
+            if(previous!=SubscriptionStatus.Suspended)return new(subscription,SubscriptionStatusChangeFailure.InvalidTransition,previous);
+            if(subscription.PeriodEnd<=DateTimeOffset.UtcNow)return new(subscription,SubscriptionStatusChangeFailure.PeriodExpired,previous);
+            subscription.Status=subscription.Plan==SubscriptionPlan.Trial?SubscriptionStatus.Trialing:SubscriptionStatus.Active;
+        }
+        subscription.UpdatedAt=DateTimeOffset.UtcNow;return new(subscription,SubscriptionStatusChangeFailure.None,previous);
+    }
+
     public static async Task<SyncRetryResult> RetrySyncAsync(SellerFinanceDbContext db,Guid sourceId,CancellationToken ct=default)
     {
         var source=await db.SyncJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==sourceId,ct);if(source is null)return new(null,SyncRetryFailure.NotFound);if(source.Status!=SyncJobStatus.RequiresAttention)return new(null,SyncRetryFailure.NotRetryable);

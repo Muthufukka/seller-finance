@@ -166,6 +166,16 @@ public sealed class SaasFeaturesTests
         var worker=new SubscriptionMaintenanceWorker(provider.GetRequiredService<IServiceScopeFactory>(),NullLogger<SubscriptionMaintenanceWorker>.Instance);Assert.Equal(2,await worker.ProcessAsync());Assert.Equal(0,await worker.ProcessAsync());await using var verify=provider.CreateAsyncScope();var db2=verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.Equal(SubscriptionStatus.Expired,(await db2.Subscriptions.FindAsync(activeId))!.Status);Assert.Equal(SubscriptionStatus.Expired,(await db2.Subscriptions.FindAsync(trialId))!.Status);Assert.Equal(SubscriptionStatus.Suspended,(await db2.Subscriptions.FindAsync(suspendedId))!.Status);var audits=await db2.AuditLogs.Where(x=>x.Action=="subscription.expired").ToArrayAsync();Assert.Equal(2,audits.Length);Assert.All(audits,x=>Assert.DoesNotContain("Suspended",x.MetadataSafe));
     }
 
+    [Fact]
+    public async Task Subscription_Admin_Can_Suspend_And_Resume_Only_A_Live_Period()
+    {
+        await using var db=CreateDb();var id=Guid.NewGuid();db.Subscriptions.Add(new(){Id=id,OrganizationId="org",Plan=SubscriptionPlan.Pro,Status=SubscriptionStatus.Active,PeriodEnd=DateTimeOffset.UtcNow.AddDays(7)});await db.SaveChangesAsync();
+        var suspended=await SaasAdminOperations.ChangeSubscriptionStatusAsync(db,"org",true);Assert.Equal(SubscriptionStatusChangeFailure.None,suspended.Failure);Assert.Equal(SubscriptionStatus.Active,suspended.PreviousStatus);Assert.Equal(SubscriptionStatus.Suspended,suspended.Subscription!.Status);await db.SaveChangesAsync();
+        var duplicate=await SaasAdminOperations.ChangeSubscriptionStatusAsync(db,"org",true);Assert.Equal(SubscriptionStatusChangeFailure.InvalidTransition,duplicate.Failure);
+        var resumed=await SaasAdminOperations.ChangeSubscriptionStatusAsync(db,"org",false);Assert.Equal(SubscriptionStatusChangeFailure.None,resumed.Failure);Assert.Equal(SubscriptionStatus.Active,resumed.Subscription!.Status);
+        resumed.Subscription.PeriodEnd=DateTimeOffset.UtcNow.AddMinutes(-1);resumed.Subscription.Status=SubscriptionStatus.Suspended;await db.SaveChangesAsync();var expired=await SaasAdminOperations.ChangeSubscriptionStatusAsync(db,"org",false);Assert.Equal(SubscriptionStatusChangeFailure.PeriodExpired,expired.Failure);Assert.Equal(SubscriptionStatus.Suspended,expired.Subscription!.Status);
+    }
+
     private static ExportJobEntity Job(string format,string report)=>new(){Id=Guid.NewGuid(),OrganizationId="org",CreatedByUserId="user",Format=format,ReportType=report,DownloadTokenHash="hash"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     private sealed class OkHandler:HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));}

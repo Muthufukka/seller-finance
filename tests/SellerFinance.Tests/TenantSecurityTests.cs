@@ -61,6 +61,12 @@ public sealed class TenantSecurityTests
     }
 
     [Fact]
+    public async Task ResolveAsync_Rejects_Suspended_Subscription_With_Live_Period()
+    {
+        await using var db=CreateDb();db.Organizations.Add(new(){Id="org",Name="org",Status="Active"});db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Status=SubscriptionStatus.Suspended,PeriodEnd=DateTimeOffset.UtcNow.AddDays(7)});db.OrganizationUsers.Add(Member("user","org"));await db.SaveChangesAsync();Assert.Null(await TenantSecurity.ResolveAsync(Context("user","org"),db));
+    }
+
+    [Fact]
     public async Task Feature_Flag_Defaults_Enabled_And_Stored_False_Wins()
     {
         await using var db=CreateDb();Assert.True(await FeatureFlags.IsEnabledAsync(db,"org","KaspiSync"));db.OrganizationFeatureFlags.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",Key="KaspiSync",Enabled=false,UpdatedByUserId="admin"});await db.SaveChangesAsync();Assert.False(await FeatureFlags.IsEnabledAsync(db,"org","KaspiSync"));Assert.False(FeatureFlags.IsKnown("unknown"));
