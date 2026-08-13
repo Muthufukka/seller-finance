@@ -61,3 +61,25 @@ jobs:
           path: |
             **/TestResults/*.trx
             migration.sql
+
+  compose-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start local PostgreSQL smoke stack
+        run: docker compose up --build -d --wait
+      - name: Verify application reaches PostgreSQL
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5068/health/database; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Stop smoke stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
