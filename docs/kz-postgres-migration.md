@@ -2,21 +2,22 @@
 
 ## Рекомендуемый путь
 
-Для Pilot выбрать отдельную PostgreSQL-инфраструктуру в Казахстане, а не продлевать текущую Render Free database. Практичный кандидат — PS Cloud: его официальная документация описывает virtual servers в зоне `kz-ala-1`, а компания указывает дата-центры в Алматы и Астане.
+Для Pilot выбрать отдельную инфраструктуру обработки данных в Казахстане, а не продлевать текущую Render Free database. Практичный кандидат для виртуальной инфраструктуры — PS Cloud: его официальная документация описывает virtual servers в зоне `kz-ala-1`, а компания указывает дата-центры в Алматы и Астане.
 
 Перед заказом запросить у провайдера письменное подтверждение именно для выбранного проекта:
 
 1. физическое размещение primary PostgreSQL и всех backup/PITR-реплик в Казахстане;
-2. доступный SLA, RPO/RTO и retention для WAL/PITR;
-3. шифрование in transit, отдельная private network и возможность IP allow-list;
-4. процедуру выгрузки/удаления данных по завершении Pilot.
+2. физическое размещение application service в Казахстане, если legal review считает обработку в памяти/логах обработкой персональных данных;
+3. доступный SLA, RPO/RTO и retention для WAL/PITR;
+4. шифрование in transit, отдельная private network и возможность IP allow-list;
+5. процедуру выгрузки/удаления данных по завершении Pilot.
 
 До получения этих подтверждений нельзя задавать `DATA_RESIDENCY=KZ` или переводить приложение из `Demo` в `Pilot`.
 
 ## Целевая схема
 
 ```text
-Internet → Render Web Service (HTTPS)
+Internet → application service in Kazakhstan (HTTPS)
                  │ private TLS connection
                  ▼
        PostgreSQL primary in Kazakhstan
@@ -26,7 +27,7 @@ Internet → Render Web Service (HTTPS)
         isolated restore database in Kazakhstan
 ```
 
-PostgreSQL не должен иметь публичного ingress. Внешний доступ для администратора — только через VPN/bastion с временным allow-list; приложение использует отдельного DB user с минимальными правами.
+PostgreSQL не должен иметь публичного ingress. Внешний доступ для администратора — только через VPN/bastion с временным allow-list; приложение использует отдельного DB user с минимальными правами. Текущий Render service в Oregon остаётся только Demo-средой до письменного вывода legal review, разрешающего либо запрещающего обработку реальных данных вне Казахстана.
 
 ## Порядок миграции
 
@@ -39,7 +40,7 @@ dotnet ef database update --project src/SellerFinance.Api
 ```
 
 4. Выполнить restore drill в отдельную restore database, затем проверить архив, миграции, количество организаций/заказов и `/health/database` на временном сервисе.
-5. Только после успешного drill создать новый DB credential для приложения и сохранить его как `DATABASE_URL` в Render Environment. Старую Render БД не удалять до smoke и сверки данных.
+5. Только после успешного drill создать новый DB credential для приложения и сохранить его как `DATABASE_URL` в целевой application environment. Старую Render БД не удалять до smoke и сверки данных.
 6. Выполнить deploy, проверить `/health`, `/health/database`, `/health/ready`, логин, dashboard и тестовый экспорт.
 7. После подписанного подтверждения legal review, SMTP delivery и успешной проверки Kaspi включить `APP_MODE=Pilot`, `SEED_DEMO_DATA=false`, `DATA_RESIDENCY=KZ`, `BACKUP_RESTORE_CONFIRMED=true`, `CREDENTIALS_ROTATED=true` и остальные подтверждения.
 

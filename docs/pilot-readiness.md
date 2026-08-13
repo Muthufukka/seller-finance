@@ -28,7 +28,7 @@
 - 13 августа 2026 правило `0.0.0.0/0` удалено из PostgreSQL inbound IP rules. Внешний трафик к базе заблокирован; сервис продолжает подключаться по внутренней сети Render и `/health/database` возвращает `healthy`.
 - 13 августа 2026 выполнена ротация credential: создан новый default credential, `DATABASE_URL` Web Service переключён на его internal URL, deploy успешно завершён, а старый credential удалён. После удаления `/health/database` вернул `healthy`.
 
-- [ ] Перенести PostgreSQL с Render Free в долгоживущую инфраструктуру, физически размещённую в Казахстане; подтвердить `DATA_RESIDENCY=KZ`.
+- [ ] Перенести PostgreSQL с Render Free в долгоживущую инфраструктуру, физически размещённую в Казахстане; подтвердить `DATA_RESIDENCY=KZ`. Legal review должен отдельно подтвердить допустимость либо запретить обработку реальных данных текущим Render service в Oregon; при запрете перенести application service в Казахстан.
 - [ ] Провести профильную юридическую проверку обработки данных; только после неё задать `LEGAL_REVIEW_CONFIRMED=true`.
 - [ ] Настроить ежедневные backup/PITR и выполнить restore drill в отдельную БД; только после подтверждения задать `BACKUP_RESTORE_CONFIRMED=true`.
 - [x] Ротировать PostgreSQL password, который был опубликован в переписке, и любые временные secrets. Выполнено 13 августа 2026; старый credential удалён, новый проверен через database health. `CREDENTIALS_ROTATED=true` следует установить только в целевой Pilot/Production среде после миграции в Казахстан.
