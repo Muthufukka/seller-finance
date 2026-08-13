@@ -62,7 +62,10 @@ type Session = {
   plan: string;
   trialEndsAt?: string;
   isSaasAdmin?: boolean;
+  deploymentMode?: string;
+  marketplaceConnectionsEnabled?: boolean;
 };
+type RuntimeInfo={mode:string;isDemo:boolean;marketplaceConnectionsEnabled:boolean};
 type OrganizationOption = { id: string; name: string; role: string };
 type Order = {
   id: string;
@@ -166,7 +169,8 @@ function App() {
     [customTo, setCustomTo] = useState(""),
     [completeCostsOnly, setCompleteCostsOnly] = useState(false);
   const [session, setSession] = useState<Session | null>(null),
-    [authReady, setAuthReady] = useState(false);
+    [authReady, setAuthReady] = useState(false),
+    [runtime,setRuntime]=useState<RuntimeInfo>({mode:"Unknown",isDemo:false,marketplaceConnectionsEnabled:true});
   const [organizations,setOrganizations]=useState<OrganizationOption[]>([]);
   const [summary, setSummary] = useState(fallback.summary),
     [products, setProducts] = useState(fallback.products),
@@ -175,9 +179,7 @@ function App() {
   const [focusedProductId,setFocusedProductId]=useState<string>();
   const [dashboardProblems, setDashboardProblems] = useState<DashboardProblems>({missingCosts:[],negativeMargins:[],syncIssues:[],totalCount:0});
   useEffect(() => {
-    fetch("/api/v1/session")
-      .then(async (r) => (r.ok ? setSession(await r.json()) : setSession(null)))
-      .finally(() => setAuthReady(true));
+    Promise.all([fetch("/api/v1/session").then(async(r)=>(r.ok?setSession(await r.json()):setSession(null))),fetch("/api/v1/runtime").then(async(r)=>{if(r.ok)setRuntime(await r.json())})]).finally(()=>setAuthReady(true));
   }, []);
   useEffect(()=>{if(!session)return setOrganizations([]);fetch("/api/v1/organizations").then(r=>r.ok?r.json():[]).then(setOrganizations);},[session?.organizationId]);
   useEffect(() => {
@@ -217,7 +219,7 @@ function App() {
       .finally(() => setLoading(false));
   }, [session, period, customFrom, customTo, completeCostsOnly]);
   if (!authReady) return <div className="auth-loading">Seller Finance</div>;
-  if (!session) return <AuthScreen onAuthenticated={setSession} />;
+  if (!session) return <AuthScreen onAuthenticated={setSession} runtime={runtime} />;
   const activeRange = periodRange(period, customFrom, customTo);
   const navigate = (p: Page) => {
     setPage(p);
@@ -258,6 +260,7 @@ function App() {
             </button>
           </div>
         </header>
+        {runtime.isDemo&&<div className="demo-mode-banner" role="status"><CircleAlert/><div><b>{t("demo.banner.title")}</b><span>{t("demo.banner.body")}</span></div></div>}
         {page === "dashboard" && <Dashboard summary={summary} products={products} points={points} problems={dashboardProblems} loading={loading} period={period} onPeriod={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} completeCostsOnly={completeCostsOnly} onCompleteCostsOnly={setCompleteCostsOnly} onNavigate={navigate} onProduct={(id)=>{setFocusedProductId(id);navigate("products")}} />}
         {page === "products" && <Products products={products} session={session} dateFrom={activeRange?.from} dateTo={activeRange?.to} openProductId={focusedProductId} />}
         {page === "orders" && <OrdersPage initialOrders={orders} session={session} products={products} initialDateFrom={activeRange?.from} initialDateTo={activeRange?.to} />}
@@ -298,7 +301,7 @@ function periodRange(period: string, customFrom: string, customTo: string) {
   return { from: iso(from), to: iso(to) };
 }
 
-function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+function AuthScreen({ onAuthenticated,runtime }: { onAuthenticated: (session: Session) => void;runtime:RuntimeInfo }) {
   const {t,locale,setLocale}=useI18n();
   const params = new URLSearchParams(location.search);
   const [register, setRegister] = useState(false),
@@ -318,6 +321,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
           password: form.get("password"),
           displayName: form.get("displayName"),
           organizationName: form.get("organizationName"),
+          acceptDemoTerms: form.get("acceptDemoTerms")==="on",
         }
       : { email: form.get("email"), password: form.get("password") };
     try {
@@ -359,6 +363,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
         </div>
         <h1>{forgot ? t("auth.forgot.title") : register ? t("auth.register.title") : t("auth.login.title")}</h1>
         <p>{forgot ? t("auth.forgot.lead") : register ? t("auth.register.lead") : t("auth.login.lead")}</p>
+        {runtime.isDemo&&<div className="auth-demo-warning"><b>{t("demo.auth.title")}</b><span>{t("demo.auth.body")}</span></div>}
         {success ? (
           <div className="auth-success">{success}</div>
         ) : (
@@ -383,6 +388,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
               {t("auth.password")}
               <input name="password" type="password" minLength={10} required autoComplete={register ? "new-password" : "current-password"} />
             </label>}
+            {register&&runtime.isDemo&&<label className="demo-consent"><input name="acceptDemoTerms" type="checkbox" required/><span>{t("demo.auth.consent")}</span></label>}
             {error && <div className="auth-error">{error}</div>}
             <button className="primary" disabled={busy}>
               <LogIn />

@@ -8,6 +8,7 @@ using System.Text.Json;
 using SellerFinance.Api;
 
 var builder = WebApplication.CreateBuilder(args);
+var deployment=DeploymentProfile.Create(builder.Configuration,builder.Environment);
 var useTestDatabase=builder.Environment.IsEnvironment("Testing")&&builder.Configuration.GetValue<bool>("TEST_USE_INMEMORY");
 var connection = useTestDatabase?"Host=localhost;Database=seller_finance_test;Username=test;Password=test":DatabaseConfiguration.GetConnectionString(builder.Configuration) ?? throw new InvalidOperationException("DATABASE_URL is required.");
 builder.Services.AddDbContext<SellerFinanceDbContext>(o => o.UseNpgsql(connection));
@@ -31,6 +32,7 @@ builder.Services.ConfigureApplicationCookie(o =>
     o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
 });
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton(deployment);
 builder.Services.AddSingleton<TokenCipher>();
 builder.Services.AddHttpClient<KaspiClient>(client =>
 {
@@ -42,7 +44,7 @@ builder.Services.AddScoped<FinancialImportService>();
 builder.Services.AddScoped<ExportBuilder>();
 builder.Services.AddTelegramDelivery();
 builder.Services.AddSingleton<NotificationDispatcher>();
-if(!useTestDatabase){builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
+if(!useTestDatabase){if(deployment.MarketplaceConnectionsEnabled)builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
 builder.Services.AddRateLimiter(options=>
 {
     options.AddPolicy("auth",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new(){PermitLimit=useTestDatabase?1000:10,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
@@ -65,7 +67,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options=>{options.ForwardedH
 var app = builder.Build();
 _ = app.Services.GetRequiredService<ExternalUrls>().BaseUri;
 await using (var scope = app.Services.CreateAsyncScope())
-    await DatabaseSeed.InitializeAsync(scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>());
+    await DatabaseSeed.InitializeAsync(scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>(),deployment.SeedDemoData);
 
 app.UseForwardedHeaders();
 if(!app.Environment.IsDevelopment()&&!app.Environment.IsEnvironment("Testing")){app.UseHsts();app.UseHttpsRedirection();}
@@ -74,11 +76,12 @@ app.UseStatusCodePages();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.Use(async(context,next)=>{context.Response.Headers["X-Content-Type-Options"]="nosniff";context.Response.Headers["Referrer-Policy"]="strict-origin-when-cross-origin";context.Response.Headers["Content-Security-Policy"]="default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'";await next();});
-app.Use(async(context,next)=>{if(!RequestOriginSecurity.IsAllowed(context,builder.Configuration)){context.Response.StatusCode=StatusCodes.Status403Forbidden;await context.Response.WriteAsJsonAsync(new{title="Cross-site request rejected"});return;}await next();});
+app.Use(async(context,next)=>{if(!RequestOriginSecurity.IsAllowed(context,builder.Configuration)){await Results.Problem(title:"Cross-site request rejected",statusCode:StatusCodes.Status403Forbidden,type:"https://httpstatuses.io/403",instance:context.Request.Path,extensions:new Dictionary<string,object?>{{"traceId",context.TraceIdentifier}}).ExecuteAsync(context);return;}await next();});
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
-app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="healthy", service="SellerFinance.Api", revision=config["RENDER_GIT_COMMIT"]?[..7] }));
+app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="healthy", service="SellerFinance.Api", revision=config["RENDER_GIT_COMMIT"]?[..7],mode=deployment.Mode.ToString() }));
+app.MapGet("/api/v1/runtime",()=>Results.Ok(new{mode=deployment.Mode.ToString(),deployment.IsDemo,deployment.MarketplaceConnectionsEnabled}));
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
     ? Results.Ok(new { status="healthy", provider=db.Database.ProviderName })
     : Results.Problem("Database connection failed", statusCode:503));
@@ -94,6 +97,7 @@ var auth = app.MapGroup("/api/v1/auth");
 auth.AddEndpointFilter(async(invocation,next)=>ApiProblemDetails.Normalize(await next(invocation),invocation.HttpContext));
 auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config,ExternalUrls urls) =>
 {
+    if(deployment.IsDemo&&!request.AcceptDemoTerms)return Results.BadRequest(new{title="Подтвердите использование только тестовых данных в Demo-режиме"});
     if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
         return Results.BadRequest(new { title="Укажите название организации" });
     var confirmationRequired=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED");if(confirmationRequired&&!email.IsConfigured)return Results.Problem("Email delivery не настроен",statusCode:503);
@@ -156,7 +160,7 @@ api.MapGet("/session", async (HttpContext ctx, SellerFinanceDbContext db) =>
 {
     var organization=await db.Organizations.AsNoTracking().SingleAsync(x=>x.Id==ctx.Tenant());
     var user=await db.Users.AsNoTracking().SingleAsync(x=>x.Id==ctx.User.FindFirstValue(ClaimTypes.NameIdentifier));
-    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name,organization.TimeZone,organization.Currency,organization.AllocateOrganizationExpenses, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()) });
+    var subscription=await Subscriptions.GetAsync(db,organization.Id);return Results.Ok(new { userId=user.Id, email=user.Email, displayName=user.DisplayName, organizationId=organization.Id, organizationName=organization.Name,organization.TimeZone,organization.Currency,organization.AllocateOrganizationExpenses, role=ctx.Membership().Role.ToString(), plan=subscription.Plan.ToString(),subscriptionStatus=subscription.Status.ToString(),subscription.BillingPeriod,subscription.PeriodStart,subscription.PeriodEnd,subscription.TrialEndsAt,isSaasAdmin=SaasSecurity.IsAdmin(ctx.User,ctx.RequestServices.GetRequiredService<IConfiguration>()),deploymentMode=deployment.Mode.ToString(),deployment.MarketplaceConnectionsEnabled });
 });
 api.MapGet("/organizations", async (ClaimsPrincipal user, SellerFinanceDbContext db) =>
 {
@@ -307,18 +311,22 @@ api.MapGet("/kaspi/connections",async(HttpContext ctx,SellerFinanceDbContext db)
 });
 api.MapPost("/kaspi/connections",async(HttpContext ctx,KaspiConnectionRequest request,SellerFinanceDbContext db,TokenCipher cipher,KaspiClient kaspi,CancellationToken ct)=>
 {
+    if(!deployment.MarketplaceConnectionsEnabled)return Results.Problem("Подключение Kaspi отключено в Demo-режиме",statusCode:403);
     if(!ctx.Membership().CanManageMembers())return Results.Forbid();var displayName=request.DisplayName?.Trim()??"";if(displayName.Length is <2 or >80||String.IsNullOrWhiteSpace(request.Token))return Results.BadRequest(new{title="Укажите название магазина и API-токен Kaspi"});var subscription=await Subscriptions.GetAsync(db,ctx.Tenant(),ct);var existing=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi"&&x.DisplayName==displayName,ct);if(existing is not null&&existing.Status!=MarketplaceConnectionStatus.Disabled)return Results.Conflict(new{title="Магазин с таким названием уже подключён"});var count=await db.MarketplaceConnections.CountAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi"&&x.Status!=MarketplaceConnectionStatus.Disabled,ct);if(count>=PlanLimits.MaxStores(subscription.Plan))return Results.Problem("Достигнут лимит магазинов тарифа",statusCode:402);KaspiResult verification;try{verification=await kaspi.GetOrdersAsync(request.Token.Trim(),DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,ct);}catch(HttpRequestException){return Results.Problem("Kaspi API временно недоступен",statusCode:503);}if(!verification.Success)return Results.Problem(verification.ErrorCode,statusCode:(int)verification.StatusCode);await using var transaction=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable,ct):null;count=await db.MarketplaceConnections.CountAsync(x=>x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi"&&x.Status!=MarketplaceConnectionStatus.Disabled,ct);if(count>=PlanLimits.MaxStores(subscription.Plan)){if(transaction is not null)await transaction.RollbackAsync(ct);return Results.Problem("Достигнут лимит магазинов тарифа",statusCode:402);}var encrypted=cipher.Encrypt(request.Token.Trim());var connection=existing??new(){Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),DisplayName=displayName};if(existing is null)db.MarketplaceConnections.Add(connection);connection.TokenCiphertext=encrypted.Ciphertext;connection.TokenNonce=encrypted.Nonce;connection.TokenTag=encrypted.Tag;connection.Status=MarketplaceConnectionStatus.Active;connection.LastVerifiedAt=DateTimeOffset.UtcNow;connection.LastErrorCode=null;connection.UpdatedAt=DateTimeOffset.UtcNow;AuditWriter.Add(db,ctx,"integration.connected","MarketplaceConnection",connection.Id.ToString(),JsonSerializer.Serialize(new{provider="Kaspi",displayName}));await db.SaveChangesAsync(ct);if(transaction is not null)await transaction.CommitAsync(ct);return Results.Created($"/api/v1/kaspi/connections/{connection.Id}",new{connection.Id,connection.DisplayName,status=connection.Status.ToString()});
 }).RequireRateLimiting("sensitive");
 api.MapPut("/kaspi/connections/{id:guid}/token",async(HttpContext ctx,Guid id,KaspiConnectionRequest request,SellerFinanceDbContext db,TokenCipher cipher,KaspiClient kaspi,CancellationToken ct)=>
 {
+    if(!deployment.MarketplaceConnectionsEnabled)return Results.Problem("Подключение Kaspi отключено в Demo-режиме",statusCode:403);
     if(!ctx.Membership().CanManageMembers())return Results.Forbid();var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi",ct);if(connection is null)return Results.NotFound();if(String.IsNullOrWhiteSpace(request.Token))return Results.BadRequest(new{title="Укажите API-токен Kaspi"});var result=await kaspi.GetOrdersAsync(request.Token.Trim(),DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,ct);if(!result.Success)return Results.Problem(result.ErrorCode,statusCode:(int)result.StatusCode);var encrypted=cipher.Encrypt(request.Token.Trim());connection.TokenCiphertext=encrypted.Ciphertext;connection.TokenNonce=encrypted.Nonce;connection.TokenTag=encrypted.Tag;connection.Status=MarketplaceConnectionStatus.Active;connection.LastVerifiedAt=DateTimeOffset.UtcNow;connection.LastErrorCode=null;connection.UpdatedAt=DateTimeOffset.UtcNow;AuditWriter.Add(db,ctx,"integration.token.replaced","MarketplaceConnection",id.ToString());await db.SaveChangesAsync(ct);return Results.NoContent();
 }).RequireRateLimiting("sensitive");
 api.MapPost("/kaspi/connections/{id:guid}/verify",async(HttpContext ctx,Guid id,SellerFinanceDbContext db,TokenCipher cipher,KaspiClient kaspi,CancellationToken ct)=>
 {
+    if(!deployment.MarketplaceConnectionsEnabled)return Results.Problem("Подключение Kaspi отключено в Demo-режиме",statusCode:403);
     if(!ctx.Membership().CanManageMembers())return Results.Forbid();var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi"&&x.Status!=MarketplaceConnectionStatus.Disabled,ct);if(connection is null)return Results.NotFound();var result=await kaspi.GetOrdersAsync(cipher.Decrypt(connection),DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow,ct);connection.Status=result.Success?MarketplaceConnectionStatus.Active:MarketplaceConnectionStatus.RequiresAttention;connection.LastVerifiedAt=result.Success?DateTimeOffset.UtcNow:null;connection.LastErrorCode=result.ErrorCode;AuditWriter.Add(db,ctx,"integration.verified","MarketplaceConnection",id.ToString(),JsonSerializer.Serialize(new{result.Success,result.ErrorCode}));await db.SaveChangesAsync(ct);return result.Success?Results.Ok(new{status="Active"}):Results.Problem(result.ErrorCode,statusCode:(int)result.StatusCode);
 }).RequireRateLimiting("sensitive");
 api.MapPost("/kaspi/connections/{id:guid}/sync",async(HttpContext ctx,Guid id,SellerFinanceDbContext db,CancellationToken ct)=>
 {
+    if(!deployment.MarketplaceConnectionsEnabled)return Results.Problem("Синхронизация Kaspi отключена в Demo-режиме",statusCode:403);
     if(!ctx.Membership().CanWrite())return Results.Forbid();if(!await FeatureFlags.IsEnabledAsync(db,ctx.Tenant(),"KaspiSync",ct))return Results.Problem("Синхронизация отключена администратором SaaS",statusCode:403);var connection=await db.MarketplaceConnections.SingleOrDefaultAsync(x=>x.Id==id&&x.OrganizationId==ctx.Tenant()&&x.Provider=="Kaspi"&&x.Status!=MarketplaceConnectionStatus.Disabled,ct);if(connection is null)return Results.NotFound();if(await db.SyncJobs.AnyAsync(x=>x.MarketplaceConnectionId==connection.Id&&(x.Status==SyncJobStatus.Queued||x.Status==SyncJobStatus.Running||x.Status==SyncJobStatus.RetryScheduled),ct))return Results.Conflict(new{title="Синхронизация уже выполняется"});var subscription=await Subscriptions.GetAsync(db,ctx.Tenant(),ct);var now=DateTimeOffset.UtcNow;var job=new SyncJobEntity{Id=Guid.NewGuid(),OrganizationId=ctx.Tenant(),MarketplaceConnectionId=connection.Id,WindowFrom=connection.LastSuccessfulSyncAt.HasValue?now.AddDays(-14):PlanLimits.InitialHistoryFrom(subscription.Plan,now),WindowTo=now};db.SyncJobs.Add(job);AuditWriter.Add(db,ctx,"integration.sync.queued","SyncJob",job.Id.ToString(),JsonSerializer.Serialize(new{connectionId=id}));try{await db.SaveChangesAsync(ct);}catch(DbUpdateException ex)when(DatabaseConflicts.IsActiveSyncJob(ex)){return Results.Conflict(new{title="Синхронизация уже выполняется"});}return Results.Accepted($"/api/v1/kaspi/sync/{job.Id}",new{job.Id,status=job.Status.ToString()});
 });
 api.MapDelete("/kaspi/connections/{id:guid}",async(HttpContext ctx,Guid id,SellerFinanceDbContext db,CancellationToken ct)=>
@@ -378,7 +386,7 @@ app.Run();
 
 public partial class Program;
 
-record RegisterRequest(string Email,string Password,string DisplayName,string OrganizationName);
+record RegisterRequest(string Email,string Password,string DisplayName,string OrganizationName,bool AcceptDemoTerms=false);
 record LoginRequest(string Email,string Password,bool RememberMe=true);
 record ProductStatusRequest(string? Status);
 record ForgotPasswordRequest(string Email);

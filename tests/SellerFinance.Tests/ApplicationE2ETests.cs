@@ -94,6 +94,14 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Demo_Mode_Requires_Explicit_Consent_And_Blocks_Real_Kaspi_Connections()
+    {
+        await using var demo=new DemoApplicationFactory();using var client=demo.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var runtime=await client.GetFromJsonAsync<JsonElement>("/api/v1/runtime");Assert.True(runtime.GetProperty("isDemo").GetBoolean());Assert.False(runtime.GetProperty("marketplaceConnectionsEnabled").GetBoolean());var email=$"demo-{Guid.NewGuid():N}@example.test";
+        var rejected=await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Demo",organizationName="Demo Org"});Assert.Equal(HttpStatusCode.BadRequest,rejected.StatusCode);Assert.Equal("application/problem+json",rejected.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Demo",organizationName="Demo Org",acceptDemoTerms=true})).StatusCode);var blocked=await client.PostAsJsonAsync("/api/v1/kaspi/connections",new{displayName="Real Store",token="must-not-be-sent"});Assert.Equal(HttpStatusCode.Forbidden,blocked.StatusCode);await using var scope=demo.Services.CreateAsyncScope();Assert.Empty(await scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().MarketplaceConnections.ToArrayAsync());
+    }
+
+    [Fact]
     public async Task Email_Confirmation_And_Password_Reset_Are_Audited_And_Do_Not_Enumerate_Accounts()
     {
         using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"auth-{Guid.NewGuid():N}@example.test";const string oldPassword="PilotTest123";const string newPassword="ChangedPilot123";
@@ -176,4 +184,13 @@ public sealed class SellerFinanceApplicationFactory : WebApplicationFactory<Prog
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){var path=request.RequestUri!.AbsolutePath;var body=path.EndsWith("/product")?Product:path.EndsWith("/entries")?Entries:Orders;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/vnd.api+json")});}
     }
     private sealed class TelegramFixtureHandler:HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));}
+}
+
+public sealed class DemoApplicationFactory:WebApplicationFactory<Program>
+{
+    private readonly string databaseName=$"seller-finance-demo-gate-{Guid.NewGuid():N}";
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("APP_MODE","Demo");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"APP_MODE","Demo"},{"SEED_DEMO_DATA","false"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
+    }
 }

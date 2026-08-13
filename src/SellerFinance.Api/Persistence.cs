@@ -573,10 +573,11 @@ public static class DatabaseSeed
 {
     private const string DemoTenantId = "demo-organization";
     private static readonly Guid DemoConnectionId=Guid.Parse("11111111-1111-1111-1111-111111111111");
-    public static async Task InitializeAsync(SellerFinanceDbContext db)
+    public static async Task InitializeAsync(SellerFinanceDbContext db,bool seedDemoData=false)
     {
         if(db.Database.IsRelational())await db.Database.MigrateAsync();else await db.Database.EnsureCreatedAsync();
         if (await db.Organizations.AnyAsync()){await EnsureNotificationRulesAsync(db);return;}
+        if(!seedDemoData)return;
 
         db.Organizations.Add(new() { Id = DemoTenantId, Name = "Aspan Market" });
         db.Subscriptions.Add(new(){Id=Guid.NewGuid(),OrganizationId=DemoTenantId});

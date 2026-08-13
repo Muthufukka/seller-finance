@@ -2,13 +2,13 @@ import {useEffect,useState} from 'react'
 import {RefreshCw,ShieldCheck,Store,Trash2} from 'lucide-react'
 import {useI18n} from './i18n'
 
-type Props={session:{organizationId:string;role:string;plan:string}}
+type Props={session:{organizationId:string;role:string;plan:string;marketplaceConnectionsEnabled?:boolean}}
 type Connection={id:string;displayName:string;status:string;lastVerifiedAt?:string;lastSuccessfulSyncAt?:string;lastErrorCode?:string;lastJob?:{id:string;status:string;importedOrders:number;errorCode?:string;createdAt:string}}
 type State={items:Connection[];maxStores:number;activeStores:number}
 
 export function KaspiConnections({session}:Props){
  const {t,locale}=useI18n(),localeCode=locale==='kk'?'kk-KZ':'ru-RU'
- const headers:Record<string,string>={},[state,setState]=useState<State>({items:[],maxStores:1,activeStores:0}),[busy,setBusy]=useState(''),[message,setMessage]=useState('');const canManage=session.role==='Owner'||session.role==='Admin',canWrite=session.role!=='Viewer'
+ const headers:Record<string,string>={},[state,setState]=useState<State>({items:[],maxStores:1,activeStores:0}),[busy,setBusy]=useState(''),[message,setMessage]=useState('');const enabled=session.marketplaceConnectionsEnabled!==false,canManage=enabled&&(session.role==='Owner'||session.role==='Admin'),canWrite=enabled&&session.role!=='Viewer'
  const load=async()=>{try{const response=await fetch('/api/v1/kaspi/connections',{headers});if(response.ok){setState(await response.json());return true}}catch{}setMessage(t('kaspi.loadError'));return false}
  useEffect(()=>{load()},[])
  const result=async(request:Promise<Response>,success:string)=>{try{const response=await request,data=await response.json().catch(()=>null);setMessage(response.ok?success:data?.title||data?.detail||t('kaspi.operationError'));if(response.ok)await load();setBusy('');return response.ok}catch{setMessage(t('kaspi.operationError'));setBusy('');return false}}

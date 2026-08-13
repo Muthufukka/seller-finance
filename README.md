@@ -45,6 +45,7 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 - `DATABASE_URL` — PostgreSQL connection URL;
 - `TOKEN_ENCRYPTION_KEY` — случайный 32-байтовый ключ в Base64. Не менять после сохранения Kaspi token без процедуры re-encryption.
 - `PUBLIC_BASE_URL` — доверенный публичный HTTPS origin без path/query, например `https://seller-finance.example`; используется для CORS/origin-проверки и ссылок в письмах/уведомлениях.
+- `APP_MODE` — явный режим `Demo`, `Pilot` или `Production`. Для production-домена обязателен; публичный `seller-finance.onrender.com` распознаётся как известная Demo-среда для безопасного перехода.
 
 Опциональные:
 
@@ -57,6 +58,7 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 - `EMAIL_SMTP_PORT` (по умолчанию `587`), `EMAIL_SMTP_TLS` (в production обязательно `true`), `EMAIL_SMTP_TIMEOUT_SECONDS` (по умолчанию `15`) — параметры SMTP;
 - `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD` — необязательная пара SMTP credentials: задаются только вместе;
 - `EMAIL_FROM_NAME` (по умолчанию `Seller Finance`) — отображаемое имя отправителя.
+- `SEED_DEMO_DATA=true` — разрешён только вместе с `APP_MODE=Demo`; добавляет исключительно синтетический набор при пустой БД.
 
 Секреты задаются только в Render Environment и не добавляются в Git или сообщения.
 
@@ -88,3 +90,4 @@ Production API documentation is available at `/api-docs`; the machine-readable c
 Render собирает React и API одним Dockerfile. Подробные процедуры находятся в [production runbook](docs/production-runbook.md), архитектура и ERD — в [architecture](docs/architecture.md).
 
 Перед реальными данными продавцов необходимо использовать долгоживущую БД в Казахстане, пройти правовую проверку и заменить ранее раскрытые credentials.
+Текущий публичный Render работает как `Demo`: интерфейс требует согласие на использование только вымышленных данных, а создание, проверка и синхронизация Kaspi connections технически отключены.
