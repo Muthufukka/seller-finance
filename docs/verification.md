@@ -18,6 +18,18 @@ Worker regression проверяет конкурентную обработку
 
 ## Production smoke
 
+## Безопасная проверка реального Kaspi API
+
+До Pilot реальный token нельзя отправлять в Demo/Render или сохранять в репозитории. Проверить доступность API и валидность token можно локально без сохранения response body:
+
+```powershell
+$env:KASPI_TOKEN='<token из кабинета Kaspi>'
+node scripts/kaspi-connectivity-smoke.mjs
+Remove-Item Env:KASPI_TOKEN
+```
+
+Скрипт запрашивает не более одной записи за последний час, не читает и не выводит тело ответа и сообщает только HTTP-статус. Успешный результат выглядит как `{"reachable":true,"authenticated":true,"status":200}`. Token нельзя передавать в чат, командную строку с сохранением истории или GitHub Actions.
+
 The smoke script validates `/api-docs` and `/openapi/v1.json`, checks critical paths in the contract, and rejects known secret/configuration names in the published JSON.
 It also submits an unsafe request with an attacker `Origin` and `Sec-Fetch-Site: cross-site`; production must reject it with HTTP 403 before endpoint execution.
 
