@@ -42,4 +42,11 @@ public class FinanceCalculatorTests
         Assert.Equal(1_000m, allocated.Sum());
         Assert.Equal(3, allocated.Count);
     }
+
+    [Fact]
+    public void ZeroRevenue_UsesNullMarginPercentages()
+    {
+        var result=FinanceCalculator.Calculate([],operatingExpenses:1_000m);
+        Assert.Equal(0m,result.Revenue);Assert.Null(result.GrossMarginPct);Assert.Null(result.OperatingMarginPct);Assert.Equal(100m,result.CoveragePct);
+    }
 }
