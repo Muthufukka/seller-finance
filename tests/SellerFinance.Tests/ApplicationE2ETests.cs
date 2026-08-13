@@ -58,8 +58,9 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     {
         using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"pilot-{Guid.NewGuid():N}@example.test";const string token="fixture-kaspi-token";
         Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Pilot Owner",organizationName="Pilot Flow"})).StatusCode);var session=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");var organizationId=session.GetProperty("organizationId").GetString()!;
+        await using(var telegramScope=factory.Services.CreateAsyncScope()){var telegramDb=telegramScope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();telegramDb.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,Status="Active",ChatId=123});await telegramDb.SaveChangesAsync();}Assert.Equal(HttpStatusCode.OK,(await client.PostAsync("/api/v1/telegram/test",null)).StatusCode);
 
-        var connectionResponse=await client.PostAsJsonAsync("/api/v1/kaspi/connections",new{displayName="Fixture Store",token});Assert.Equal(HttpStatusCode.Created,connectionResponse.StatusCode);var connectionId=(await connectionResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var connectionResponse=await client.PostAsJsonAsync("/api/v1/kaspi/connections",new{displayName="Fixture Store",token});Assert.Equal(HttpStatusCode.Created,connectionResponse.StatusCode);var connectionId=(await connectionResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();Assert.Equal(HttpStatusCode.OK,(await client.PostAsync($"/api/v1/kaspi/connections/{connectionId}/verify",null)).StatusCode);
         var syncResponse=await client.PostAsync($"/api/v1/kaspi/connections/{connectionId}/sync",null);Assert.Equal(HttpStatusCode.Accepted,syncResponse.StatusCode);var syncId=(await syncResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         await new KaspiSyncWorker(factory.Services.GetRequiredService<IServiceScopeFactory>(),NullLogger<KaspiSyncWorker>.Instance).ProcessOneAsync(CancellationToken.None);
         var sync=await client.GetFromJsonAsync<JsonElement>($"/api/v1/kaspi/sync/{syncId}");Assert.Equal("Succeeded",sync.GetProperty("status").GetString());Assert.Equal(1,sync.GetProperty("importedOrders").GetInt32());
@@ -72,7 +73,7 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         var exportResponse=await client.PostAsJsonAsync("/api/v1/exports",new{reportType="Products",format="csv",dateFrom="2026-08-01",dateTo="2026-08-31",completeCostsOnly=true});Assert.Equal(HttpStatusCode.Accepted,exportResponse.StatusCode);var export=await exportResponse.Content.ReadFromJsonAsync<JsonElement>();var exportId=export.GetProperty("id").GetGuid();var downloadToken=export.GetProperty("downloadToken").GetString()!;
         await new ExportWorker(factory.Services.GetRequiredService<IServiceScopeFactory>(),NullLogger<ExportWorker>.Instance).ProcessOneAsync(CancellationToken.None);var exportStatus=await client.GetFromJsonAsync<JsonElement>($"/api/v1/exports/{exportId}");Assert.Equal("Succeeded",exportStatus.GetProperty("status").GetString());Assert.Equal(1,exportStatus.GetProperty("rowCount").GetInt32());var download=await client.GetAsync($"/api/v1/exports/download/{downloadToken}");Assert.Equal(HttpStatusCode.OK,download.StatusCode);Assert.Contains("FIXTURE-SKU",await download.Content.ReadAsStringAsync());
 
-        await using var scope=factory.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var connection=await db.MarketplaceConnections.SingleAsync(x=>x.Id==connectionId);Assert.DoesNotContain(token,Encoding.UTF8.GetString(connection.TokenCiphertext));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="product.cost.import.applied"));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="export.queued"));
+        await using var scope=factory.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var connection=await db.MarketplaceConnections.SingleAsync(x=>x.Id==connectionId);Assert.DoesNotContain(token,Encoding.UTF8.GetString(connection.TokenCiphertext));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="integration.verified"&&x.MetadataSafe!.Contains("Success")));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="telegram.test.sent"));Assert.False(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.MetadataSafe.Contains(token)));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="product.cost.import.applied"));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="export.queued"));
     }
 
     [Fact]
@@ -96,7 +97,7 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         var knownForgot=await client.PostAsJsonAsync("/api/v1/auth/forgot-password",new{email});var unknownForgot=await client.PostAsJsonAsync("/api/v1/auth/forgot-password",new{email=$"missing-{Guid.NewGuid():N}@example.test"});Assert.Equal(HttpStatusCode.OK,knownForgot.StatusCode);Assert.Equal(await knownForgot.Content.ReadAsStringAsync(),await unknownForgot.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.NoContent,(await client.PostAsJsonAsync("/api/v1/auth/reset-password",new{email,token=resetToken,newPassword})).StatusCode);Assert.Equal(HttpStatusCode.BadRequest,(await client.PostAsJsonAsync("/api/v1/auth/reset-password",new{email,token=resetToken,newPassword="AnotherPilot123"})).StatusCode);
         await client.PostAsync("/api/v1/auth/logout",null);Assert.Equal(HttpStatusCode.Unauthorized,(await client.PostAsJsonAsync("/api/v1/auth/login",new{email,password=oldPassword,rememberMe=false})).StatusCode);Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/login",new{email,password=newPassword,rememberMe=false})).StatusCode);
-        await using(var scope=factory.Services.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.email.confirmed"&&x.UserId==userId));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.password.reset.completed"&&x.UserId==userId));}
+        await using(var scope=factory.Services.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.email.confirmed"&&x.UserId==userId));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.password.reset.completed"&&x.UserId==userId));Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId==organizationId&&x.Action=="auth.logout"&&x.UserId==userId));}
     }
 
     [Fact]
@@ -150,13 +151,14 @@ public sealed class SellerFinanceApplicationFactory : WebApplicationFactory<Prog
         builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","false");
         builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>
         {
-            ["TEST_USE_INMEMORY"]="true",["TOKEN_ENCRYPTION_KEY"]=Convert.ToBase64String(new byte[32]),["EMAIL_CONFIRMATION_REQUIRED"]="false"
+            ["TEST_USE_INMEMORY"]="true",["TOKEN_ENCRYPTION_KEY"]=Convert.ToBase64String(new byte[32]),["EMAIL_CONFIRMATION_REQUIRED"]="false",["TELEGRAM_BOT_TOKEN"]="fixture-telegram-token"
         }));
         builder.ConfigureServices(services=>
         {
             services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();
             services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));
             services.AddHttpClient<KaspiClient>(client=>{client.BaseAddress=new Uri("https://kaspi.kz/shop/api/v2/");client.Timeout=TimeSpan.FromSeconds(5);}).ConfigurePrimaryHttpMessageHandler(()=>new KaspiFixtureHandler());
+            services.AddHttpClient<TelegramClient>().ConfigurePrimaryHttpMessageHandler(()=>new TelegramFixtureHandler());
         });
     }
 
@@ -167,4 +169,5 @@ public sealed class SellerFinanceApplicationFactory : WebApplicationFactory<Prog
         private const string Product="""{"data":{"type":"masterproducts","id":"fixture-product","attributes":{"code":"FIXTURE-SKU","name":"Fixture Product","category":"Home"}}}""";
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken){var path=request.RequestUri!.AbsolutePath;var body=path.EndsWith("/product")?Product:path.EndsWith("/entries")?Entries:Orders;return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/vnd.api+json")});}
     }
+    private sealed class TelegramFixtureHandler:HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));}
 }
