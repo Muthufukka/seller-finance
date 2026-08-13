@@ -90,7 +90,14 @@ public sealed class SaasFeaturesTests
     {
         await using var db=CreateDb();const string code="link-code";db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",LinkCodeHash=TokenTools.Hash(code),LinkCodeExpiresAt=DateTimeOffset.UtcNow.AddMinutes(5)});await db.SaveChangesAsync();var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var client=new TelegramClient(new HttpClient(new OkHandler()),config);using var update=JsonDocument.Parse("""{"message":{"text":"/start link-code","chat":{"id":12345}}}""");
         await TelegramWebhook.ProcessAsync(update.RootElement,db,client,CancellationToken.None);
-        var connection=await db.TelegramConnections.SingleAsync();Assert.Equal("Active",connection.Status);Assert.Equal(12345,connection.ChatId);
+        var connection=await db.TelegramConnections.SingleAsync();Assert.Equal("Active",connection.Status);Assert.Equal(12345,connection.ChatId);Assert.True(await db.AuditLogs.AnyAsync(x=>x.OrganizationId=="org"&&x.Action=="telegram.link.completed"&&x.EntityId==connection.Id.ToString()));Assert.DoesNotContain(code,connection.LinkCodeHash);
+    }
+
+    [Fact]
+    public async Task Telegram_Webhook_Ignores_Malformed_Chat_Id_Without_Consuming_Link_Code()
+    {
+        await using var db=CreateDb();const string code="pending-code";var hash=TokenTools.Hash(code);db.TelegramConnections.Add(new(){Id=Guid.NewGuid(),OrganizationId="org",LinkCodeHash=hash,LinkCodeExpiresAt=DateTimeOffset.UtcNow.AddMinutes(5)});await db.SaveChangesAsync();var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"TELEGRAM_BOT_TOKEN","test"}}).Build();var client=new TelegramClient(new HttpClient(new OkHandler()),config);using var update=JsonDocument.Parse("""{"message":{"text":"/start pending-code","chat":{"id":"not-a-number"}}}""");
+        await TelegramWebhook.ProcessAsync(update.RootElement,db,client,CancellationToken.None);var connection=await db.TelegramConnections.SingleAsync();Assert.Equal("Pending",connection.Status);Assert.Null(connection.ChatId);Assert.Equal(hash,connection.LinkCodeHash);Assert.Empty(db.AuditLogs);
     }
 
     [Fact]

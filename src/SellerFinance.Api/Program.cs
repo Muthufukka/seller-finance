@@ -40,7 +40,7 @@ builder.Services.AddHttpClient<KaspiClient>(client =>
 builder.Services.AddScoped<CostImportService>();
 builder.Services.AddScoped<FinancialImportService>();
 builder.Services.AddScoped<ExportBuilder>();
-builder.Services.AddHttpClient<TelegramClient>(client=>client.Timeout=TimeSpan.FromSeconds(15));
+builder.Services.AddTelegramDelivery();
 builder.Services.AddSingleton<NotificationDispatcher>();
 if(!useTestDatabase){builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
 builder.Services.AddRateLimiter(options=>
