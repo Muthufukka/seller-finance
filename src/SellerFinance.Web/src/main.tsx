@@ -757,9 +757,9 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
         <input aria-label={t("orders.search")} placeholder={t("orders.number")} value={search} onChange={(e) => setSearch(e.target.value)} />
         <select aria-label={t("orders.status")} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">{t("orders.allStatuses")}</option>
-          <option value="COMPLETED">Completed</option>
-          <option value="RETURNED">Returned</option>
-          <option value="CANCELLED">Cancelled</option>
+          <option value="COMPLETED">{t("orders.completedStatus")}</option>
+          <option value="RETURNED">{t("orders.returnedStatus")}</option>
+          <option value="CANCELLED">{t("orders.cancelledStatus")}</option>
           <option value="PENDING">{t("orders.pending")}</option>
         </select>
         <label className="order-date">{t("orders.from")}<input aria-label={t("orders.dateFrom")} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
@@ -839,7 +839,7 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
                 <b>{money(detail.revenue)}</b>
               </div>
               <div>
-                <span>COGS</span>
+                <span>{t("orders.cogs")}</span>
                 <b>{money(detail.cogs)}</b>
               </div>
               <div>
@@ -859,7 +859,7 @@ function OrdersPage({ initialOrders, session, products, initialDateFrom, initial
                 <b>{money(detail.operatingProfit)}</b>
               </div>
               <div><span>{t("orders.margin")}</span><b>{pct(detail.operatingMarginPct)}</b></div>
-              <div><span>Coverage</span><b>{pct(detail.coveragePct)}</b></div>
+              <div><span>{t("orders.coverage")}</span><b>{pct(detail.coveragePct)}</b></div>
             </div>
             <h3>{t("orders.statusHistory")}</h3>
             <div className="status-history">
