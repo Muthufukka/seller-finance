@@ -42,5 +42,7 @@ Kaspi adapter классифицирует `401/403`, `429`, сетевые/time
 
 Telegram bot token остаётся в Render secret. Поскольку Telegram Bot API использует token в URL, для typed `TelegramClient` отключены стандартные `HttpClientFactory` request-логи; worker сохраняет только безопасные error codes. Link code хранится как hash, инвалидируется после успешной привязки, а завершение linking фиксируется в audit log без chat id и секретов.
 
+Subscription maintenance переводит истёкшие `Trialing`/`Active` периоды в `Expired` и создаёт отдельное системное audit-событие для каждой организации. Состояние `Suspended` не перезаписывается автоматикой, чтобы сохранялась семантика административной/платёжной блокировки.
+
 Kaspi, export и Telegram workers используют атомарный conditional claim в PostgreSQL. Только один экземпляр может перевести конкретную запись в `Running`/`Sending`; задания с истёкшим lease восстанавливаются после падения процесса. Частичный уникальный индекс допускает не более одного активного sync job на Kaspi connection, а конкурентная постановка возвращает безопасный conflict вместо дубля.
 Kaspi worker дополнительно сверяет `OrganizationId` задания и подключения перед расшифровкой токена; повреждённая или cross-tenant связь переводится в `RequiresAttention` с безопасным кодом и не запускает обращение к marketplace.

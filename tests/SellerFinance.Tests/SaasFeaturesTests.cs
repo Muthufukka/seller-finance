@@ -159,6 +159,13 @@ public sealed class SaasFeaturesTests
         Assert.Equal(SyncRetryFailure.OrganizationDisabled,(await SaasAdminOperations.RetrySyncAsync(db,source)).Failure);
     }
 
+    [Fact]
+    public async Task Subscription_Maintenance_Expires_Due_Access_And_Audits_Without_Overwriting_Suspension()
+    {
+        var services=new ServiceCollection();var database=Guid.NewGuid().ToString();services.AddDbContext<SellerFinanceDbContext>(x=>x.UseInMemoryDatabase(database));await using var provider=services.BuildServiceProvider();Guid activeId=Guid.NewGuid(),trialId=Guid.NewGuid(),suspendedId=Guid.NewGuid();await using(var scope=provider.CreateAsyncScope()){var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();db.Subscriptions.AddRange(new(){Id=activeId,OrganizationId="active",Status=SubscriptionStatus.Active,PeriodEnd=DateTimeOffset.UtcNow.AddMinutes(-1)},new(){Id=trialId,OrganizationId="trial",Status=SubscriptionStatus.Trialing,PeriodEnd=DateTimeOffset.UtcNow.AddMinutes(-1)},new(){Id=suspendedId,OrganizationId="suspended",Status=SubscriptionStatus.Suspended,PeriodEnd=DateTimeOffset.UtcNow.AddMinutes(-1)},new(){Id=Guid.NewGuid(),OrganizationId="future",Status=SubscriptionStatus.Active,PeriodEnd=DateTimeOffset.UtcNow.AddDays(1)});await db.SaveChangesAsync();}
+        var worker=new SubscriptionMaintenanceWorker(provider.GetRequiredService<IServiceScopeFactory>(),NullLogger<SubscriptionMaintenanceWorker>.Instance);Assert.Equal(2,await worker.ProcessAsync());Assert.Equal(0,await worker.ProcessAsync());await using var verify=provider.CreateAsyncScope();var db2=verify.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();Assert.Equal(SubscriptionStatus.Expired,(await db2.Subscriptions.FindAsync(activeId))!.Status);Assert.Equal(SubscriptionStatus.Expired,(await db2.Subscriptions.FindAsync(trialId))!.Status);Assert.Equal(SubscriptionStatus.Suspended,(await db2.Subscriptions.FindAsync(suspendedId))!.Status);var audits=await db2.AuditLogs.Where(x=>x.Action=="subscription.expired").ToArrayAsync();Assert.Equal(2,audits.Length);Assert.All(audits,x=>Assert.DoesNotContain("Suspended",x.MetadataSafe));
+    }
+
     private static ExportJobEntity Job(string format,string report)=>new(){Id=Guid.NewGuid(),OrganizationId="org",CreatedByUserId="user",Format=format,ReportType=report,DownloadTokenHash="hash"};
     private static SellerFinanceDbContext CreateDb()=>new(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     private sealed class OkHandler:HttpMessageHandler{protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));}

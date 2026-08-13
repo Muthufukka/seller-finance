@@ -19,5 +19,15 @@ public static class SaasAdminOperations
 public sealed class SubscriptionMaintenanceWorker(IServiceScopeFactory scopes,ILogger<SubscriptionMaintenanceWorker> logger):BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken){while(!stoppingToken.IsCancellationRequested){try{await ProcessAsync(stoppingToken);}catch(Exception ex){logger.LogError("Subscription maintenance failed: {ErrorType}",ex.GetType().Name);}await Task.Delay(TimeSpan.FromMinutes(1),stoppingToken);}}
-    public async Task<int> ProcessAsync(CancellationToken ct=default){await using var scope=scopes.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();return await db.Subscriptions.Where(x=>x.PeriodEnd<=DateTimeOffset.UtcNow&&x.Status!=SubscriptionStatus.Expired).ExecuteUpdateAsync(x=>x.SetProperty(y=>y.Status,SubscriptionStatus.Expired).SetProperty(y=>y.UpdatedAt,DateTimeOffset.UtcNow),ct);}
+    public async Task<int> ProcessAsync(CancellationToken ct=default)
+    {
+        await using var scope=scopes.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var now=DateTimeOffset.UtcNow;
+        var due=await db.Subscriptions.Where(x=>x.PeriodEnd<=now&&(x.Status==SubscriptionStatus.Trialing||x.Status==SubscriptionStatus.Active)).ToArrayAsync(ct);
+        foreach(var subscription in due)
+        {
+            var previous=subscription.Status;subscription.Status=SubscriptionStatus.Expired;subscription.UpdatedAt=now;
+            db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=subscription.OrganizationId,Action="subscription.expired",EntityType="Subscription",EntityId=subscription.Id.ToString(),MetadataSafe=$"{{\"previousStatus\":\"{previous}\"}}"});
+        }
+        if(due.Length>0)await db.SaveChangesAsync(ct);return due.Length;
+    }
 }
