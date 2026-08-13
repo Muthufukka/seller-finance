@@ -8,7 +8,8 @@
 4. `dotnet ef migrations script --idempotent` проверяет построение полного PostgreSQL migration script.
 5. CI поднимает чистый PostgreSQL 17, применяет всю цепочку миграций и проверяет реальные unique constraints и атомарное подтверждение импорта себестоимости. Локально эти тесты включаются переменной `TEST_POSTGRES_CONNECTION` и должны указывать только на одноразовую тестовую БД: тест очищает схему `public`.
 6. PostgreSQL regression намеренно пытается связать sync job с Kaspi connection другой организации и расход с чужим товаром; обе записи должны завершиться `foreign_key_violation`.
-5. GitHub Actions выполняет эти проверки при каждом push и pull request.
+7. `compose-smoke` в GitHub Actions собирает `docker-compose.yml`, поднимает PostgreSQL 18 и приложение, затем ждёт успешный `/health/database`. Это проверяет локальный migration/restore smoke-контур без ручной установки PostgreSQL.
+8. GitHub Actions выполняет эти проверки при каждом push и pull request.
 
 Worker regression проверяет конкурентную обработку export jobs, восстановление stale export/Telegram leases и схему частичного уникального индекса активных Kaspi sync jobs. Идемпотентный migration script дополнительно проверяется на наличие lease-колонок, дедупликации существующих активных jobs и уникального индекса.
 Оба preview/confirm контура импорта используют атомарный claim в PostgreSQL. Security regression покрывает подмену расширения, бинарный CSV, формулы, повторяющиеся заголовки и cross-tenant ссылки; PostgreSQL integration одновременно подтверждает один финансовый preview из двух конкурирующих запросов ровно один раз.
