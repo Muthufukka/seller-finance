@@ -22,6 +22,13 @@ public sealed class DeploymentProfileTests
     }
 
     [Fact]
+    public void Real_Data_Mode_Requires_All_Production_Gates()
+    {
+        var incomplete=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"APP_MODE","Pilot"},{"DATA_RESIDENCY","KZ"},{"LEGAL_REVIEW_CONFIRMED","true"},{"BACKUP_RESTORE_CONFIRMED","true"},{"CREDENTIALS_ROTATED","true"},{"EMAIL_CONFIRMATION_REQUIRED","false"}}).Build();var blocked=DeploymentProfile.Create(incomplete,new EnvironmentStub("Production"));Assert.True(blocked.IsRealDataMode);Assert.False(blocked.ProductionGatesSatisfied);Assert.False(blocked.MarketplaceConnectionsEnabled);
+        var complete=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"APP_MODE","Production"},{"DATA_RESIDENCY","KZ"},{"LEGAL_REVIEW_CONFIRMED","true"},{"BACKUP_RESTORE_CONFIRMED","true"},{"CREDENTIALS_ROTATED","true"},{"EMAIL_CONFIRMATION_REQUIRED","true"}}).Build();var ready=DeploymentProfile.Create(complete,new EnvironmentStub("Production"));Assert.True(ready.ProductionGatesSatisfied);Assert.True(ready.MarketplaceConnectionsEnabled);
+    }
+
+    [Fact]
     public async Task Database_Seed_Is_Opt_In()
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);await DatabaseSeed.InitializeAsync(db);Assert.Empty(await db.Organizations.ToArrayAsync());await DatabaseSeed.InitializeAsync(db,true);Assert.Contains(await db.Organizations.ToArrayAsync(),x=>x.Id=="demo-organization");

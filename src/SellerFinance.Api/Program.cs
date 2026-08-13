@@ -44,7 +44,7 @@ builder.Services.AddScoped<FinancialImportService>();
 builder.Services.AddScoped<ExportBuilder>();
 builder.Services.AddTelegramDelivery();
 builder.Services.AddSingleton<NotificationDispatcher>();
-if(!useTestDatabase){if(deployment.MarketplaceConnectionsEnabled)builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
+if(!useTestDatabase&&deployment.ProductionGatesSatisfied){if(deployment.MarketplaceConnectionsEnabled)builder.Services.AddHostedService<KaspiSyncWorker>();builder.Services.AddHostedService<ExportWorker>();builder.Services.AddHostedService<NotificationDeliveryWorker>();builder.Services.AddHostedService<SubscriptionMaintenanceWorker>();}
 builder.Services.AddRateLimiter(options=>
 {
     options.AddPolicy("auth",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",_=>new(){PermitLimit=useTestDatabase?1000:10,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
@@ -81,23 +81,24 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
 app.MapGet("/health", (IConfiguration config) => Results.Ok(new { status="healthy", service="SellerFinance.Api", revision=config["RENDER_GIT_COMMIT"]?[..7],mode=deployment.Mode.ToString() }));
-app.MapGet("/api/v1/runtime",()=>Results.Ok(new{mode=deployment.Mode.ToString(),deployment.IsDemo,deployment.MarketplaceConnectionsEnabled}));
+app.MapGet("/api/v1/runtime",()=>Results.Ok(new{mode=deployment.Mode.ToString(),deployment.IsDemo,deployment.IsRealDataMode,deployment.ProductionGatesSatisfied,deployment.MarketplaceConnectionsEnabled,gates=new{dataResidency=deployment.DataResidencyConfirmed,legalReview=deployment.LegalReviewConfirmed,backupRestore=deployment.BackupRestoreConfirmed,credentialsRotated=deployment.CredentialsRotated,emailConfirmation=deployment.EmailConfirmationRequired}}));
 app.MapGet("/health/database", async (SellerFinanceDbContext db) => await db.Database.CanConnectAsync()
     ? Results.Ok(new { status="healthy", provider=db.Database.ProviderName })
     : Results.Problem("Database connection failed", statusCode:503));
-app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config,EmailDelivery email)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])&&(!config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")||email.IsConfigured)?Results.Ok(new{status="ready",database="healthy",encryption="configured",email=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")?"configured":"optional"}):Results.Problem("Service is not ready",statusCode:503));
+app.MapGet("/health/ready",async(SellerFinanceDbContext db,IConfiguration config,EmailDelivery email)=>await db.Database.CanConnectAsync()&&!String.IsNullOrWhiteSpace(config["TOKEN_ENCRYPTION_KEY"])&&(!config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")||email.IsConfigured)&&deployment.ProductionGatesSatisfied?Results.Ok(new{status="ready",database="healthy",encryption="configured",email=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED")?"configured":"optional",mode=deployment.Mode.ToString(),productionGates=deployment.IsRealDataMode?"satisfied":"not-required"}):Results.Problem("Service is not ready",statusCode:503));
 app.MapOpenApi();
 app.MapGet("/api-docs",()=>Results.Content("""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Seller Finance API</title></head><body><main><h1>Seller Finance API v1</h1><p>Актуальный машиночитаемый контракт: <a href="/openapi/v1.json">OpenAPI JSON</a>.</p><p>Business API использует защищённую HttpOnly cookie-сессию. Организация определяется только по membership авторизованного пользователя.</p><h2>Основные группы</h2><ul><li>Auth и session: /api/v1/auth, /api/v1/session</li><li>Организации и роли: /api/v1/organizations</li><li>Kaspi: /api/v1/kaspi</li><li>Товары и себестоимость: /api/v1/products, /api/v1/costs</li><li>Заказы и финансы: /api/v1/orders, /api/v1/expenses, /api/v1/fee-rules</li><li>Аналитика и экспорт: /api/v1/analytics, /api/v1/exports</li></ul><p><a href="/">Вернуться в Seller Finance</a></p></main></body></html>
 ""","text/html; charset=utf-8"));
-app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDbContext db)=>{var hash=TokenTools.Hash(token);var job=await db.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.DownloadTokenHash==hash&&x.Status==ExportJobStatus.Succeeded&&x.ExpiresAt>DateTimeOffset.UtcNow&&x.FileContent!=null);return job is null?Results.NotFound():Results.File(job.FileContent!,job.ContentType!,job.FileName);}).RequireRateLimiting("sensitive");
-app.MapPost("/api/v1/telegram/webhook",async(HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{var secret=context.Request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
+app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDbContext db)=>{if(deployment.IsRealDataMode&&!deployment.ProductionGatesSatisfied)return Results.Problem("Pilot/Production gates не подтверждены",statusCode:503);var hash=TokenTools.Hash(token);var job=await db.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x=>x.DownloadTokenHash==hash&&x.Status==ExportJobStatus.Succeeded&&x.ExpiresAt>DateTimeOffset.UtcNow&&x.FileContent!=null);return job is null?Results.NotFound():Results.File(job.FileContent!,job.ContentType!,job.FileName);}).RequireRateLimiting("sensitive");
+app.MapPost("/api/v1/telegram/webhook",async(HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{if(deployment.IsRealDataMode&&!deployment.ProductionGatesSatisfied)return Results.Problem("Pilot/Production gates не подтверждены",statusCode:503);var secret=context.Request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 
 var auth = app.MapGroup("/api/v1/auth");
 auth.AddEndpointFilter(async(invocation,next)=>ApiProblemDetails.Normalize(await next(invocation),invocation.HttpContext));
 auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config,ExternalUrls urls) =>
 {
     if(deployment.IsDemo&&!request.AcceptDemoTerms)return Results.BadRequest(new{title="Подтвердите использование только тестовых данных в Demo-режиме"});
+    if(deployment.IsRealDataMode&&!deployment.ProductionGatesSatisfied)return Results.Problem("Pilot/Production gates не подтверждены",statusCode:503);
     if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
         return Results.BadRequest(new { title="Укажите название организации" });
     var confirmationRequired=config.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED");if(confirmationRequired&&!email.IsConfigured)return Results.Problem("Email delivery не настроен",statusCode:503);
@@ -149,6 +150,7 @@ api.AddEndpointFilter(async(invocation,next)=>ApiProblemDetails.Normalize(await 
 api.AddEndpointFilter(async (invocation, next) =>
 {
     var context=invocation.HttpContext;
+    if(deployment.IsRealDataMode&&!deployment.ProductionGatesSatisfied)return Results.Problem("Pilot/Production gates не подтверждены",statusCode:503);
     if (context.Request.Path.StartsWithSegments("/api/v1/auth")) return await next(invocation);
     var db=context.RequestServices.GetRequiredService<SellerFinanceDbContext>();
     var membership=await TenantSecurity.ResolveAsync(context,db);

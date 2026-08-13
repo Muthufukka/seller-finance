@@ -102,6 +102,12 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Pilot_Mode_Stays_Unready_Until_Operational_Gates_Are_Confirmed()
+    {
+        await using var pilot=new UnreadyPilotApplicationFactory();using var client=pilot.CreateClient(new(){AllowAutoRedirect=false});var runtime=await client.GetFromJsonAsync<JsonElement>("/api/v1/runtime");Assert.True(runtime.GetProperty("isRealDataMode").GetBoolean());Assert.False(runtime.GetProperty("productionGatesSatisfied").GetBoolean());Assert.False(runtime.GetProperty("marketplaceConnectionsEnabled").GetBoolean());Assert.Equal(HttpStatusCode.ServiceUnavailable,(await client.GetAsync("/health/ready")).StatusCode);Assert.Equal(HttpStatusCode.ServiceUnavailable,(await client.GetAsync("/api/v1/exports/download/unknown")).StatusCode);var registration=await client.PostAsJsonAsync("/api/v1/auth/register",new{email=$"pilot-gate-{Guid.NewGuid():N}@example.test",password="PilotTest123",displayName="Pilot",organizationName="Pilot Org"});Assert.Equal(HttpStatusCode.ServiceUnavailable,registration.StatusCode);await using var scope=pilot.Services.CreateAsyncScope();Assert.Empty(await scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>().Users.ToArrayAsync());
+    }
+
+    [Fact]
     public async Task Email_Confirmation_And_Password_Reset_Are_Audited_And_Do_Not_Enumerate_Accounts()
     {
         using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"auth-{Guid.NewGuid():N}@example.test";const string oldPassword="PilotTest123";const string newPassword="ChangedPilot123";
@@ -192,5 +198,14 @@ public sealed class DemoApplicationFactory:WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("APP_MODE","Demo");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"APP_MODE","Demo"},{"SEED_DEMO_DATA","false"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
+    }
+}
+
+public sealed class UnreadyPilotApplicationFactory:WebApplicationFactory<Program>
+{
+    private readonly string databaseName=$"seller-finance-pilot-gate-{Guid.NewGuid():N}";
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("APP_MODE","Pilot");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"APP_MODE","Pilot"},{"DATA_RESIDENCY","KZ"},{"LEGAL_REVIEW_CONFIRMED","false"},{"BACKUP_RESTORE_CONFIRMED","false"},{"CREDENTIALS_ROTATED","false"},{"EMAIL_CONFIRMATION_REQUIRED","false"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
     }
 }

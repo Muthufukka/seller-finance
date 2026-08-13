@@ -47,6 +47,14 @@ dotnet ef migrations add Name --project src/SellerFinance.Api --startup-project 
 - `PUBLIC_BASE_URL` — доверенный публичный HTTPS origin без path/query, например `https://seller-finance.example`; используется для CORS/origin-проверки и ссылок в письмах/уведомлениях.
 - `APP_MODE` — явный режим `Demo`, `Pilot` или `Production`. Для production-домена обязателен; публичный `seller-finance.onrender.com` распознаётся как известная Demo-среда для безопасного перехода.
 
+Для `APP_MODE=Pilot|Production` readiness и обработка business API включаются только после всех подтверждений:
+
+- `DATA_RESIDENCY=KZ` — целевая PostgreSQL физически размещена в Казахстане;
+- `LEGAL_REVIEW_CONFIRMED=true` — завершена профильная правовая проверка;
+- `BACKUP_RESTORE_CONFIRMED=true` — выполнен и зафиксирован restore drill;
+- `CREDENTIALS_ROTATED=true` — раскрытые/временные credentials заменены;
+- `EMAIL_CONFIRMATION_REQUIRED=true` и рабочий SMTP.
+
 Опциональные:
 
 - `SAAS_ADMIN_EMAIL` — email администратора SaaS;
@@ -74,7 +82,7 @@ Production probes:
 
 - `/health` — процесс приложения;
 - `/health/database` — PostgreSQL;
-- `/health/ready` — БД и ключ шифрования.
+- `/health/ready` — БД, ключ шифрования, email и обязательные Pilot/Production gates.
 
 ## Подключение Kaspi
 

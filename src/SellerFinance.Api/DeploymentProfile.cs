@@ -2,10 +2,12 @@ namespace SellerFinance.Api;
 
 public enum ApplicationMode { Demo, Pilot, Production, Testing }
 
-public sealed record DeploymentProfile(ApplicationMode Mode,bool SeedDemoData)
+public sealed record DeploymentProfile(ApplicationMode Mode,bool SeedDemoData,bool DataResidencyConfirmed,bool LegalReviewConfirmed,bool BackupRestoreConfirmed,bool CredentialsRotated,bool EmailConfirmationRequired)
 {
     public bool IsDemo=>Mode==ApplicationMode.Demo;
-    public bool MarketplaceConnectionsEnabled=>!IsDemo;
+    public bool IsRealDataMode=>Mode is ApplicationMode.Pilot or ApplicationMode.Production;
+    public bool ProductionGatesSatisfied=>!IsRealDataMode||DataResidencyConfirmed&&LegalReviewConfirmed&&BackupRestoreConfirmed&&CredentialsRotated&&EmailConfirmationRequired;
+    public bool MarketplaceConnectionsEnabled=>!IsDemo&&ProductionGatesSatisfied;
 
     public static DeploymentProfile Create(IConfiguration configuration,IHostEnvironment environment)
     {
@@ -20,6 +22,7 @@ public sealed record DeploymentProfile(ApplicationMode Mode,bool SeedDemoData)
         if(!Enum.TryParse<ApplicationMode>(configured,true,out var mode))throw new InvalidOperationException("APP_MODE must be Demo, Pilot, Production or Testing");
         var seed=configuration.GetValue<bool>("SEED_DEMO_DATA");
         if(seed&&mode!=ApplicationMode.Demo)throw new InvalidOperationException("SEED_DEMO_DATA is allowed only when APP_MODE=Demo");
-        return new(mode,seed);
+        var residency=String.Equals(configuration["DATA_RESIDENCY"]?.Trim(),"KZ",StringComparison.OrdinalIgnoreCase);
+        return new(mode,seed,residency,configuration.GetValue<bool>("LEGAL_REVIEW_CONFIRMED"),configuration.GetValue<bool>("BACKUP_RESTORE_CONFIRMED"),configuration.GetValue<bool>("CREDENTIALS_ROTATED"),configuration.GetValue<bool>("EMAIL_CONFIRMATION_REQUIRED"));
     }
 }

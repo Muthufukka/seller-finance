@@ -7,7 +7,7 @@
 Public API documentation: `/api-docs`. Machine-readable OpenAPI contract: `/openapi/v1.json`. After every deploy verify critical routes and confirm that the contract contains no secrets or connection strings.
 
 1. Убедиться, что CI-тесты и frontend build успешны.
-2. Проверить обязательные Render settings: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` с HTTPS origin и явный `APP_MODE=Pilot|Production`. `SEED_DEMO_DATA` обязан быть выключен. Перед включением `EMAIL_CONFIRMATION_REQUIRED=true` задать и проверить `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS=true`, `EMAIL_FROM` и парные `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`.
+2. Проверить обязательные Render settings: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` с HTTPS origin и явный `APP_MODE=Pilot|Production`. `SEED_DEMO_DATA` обязан быть выключен. Установить `DATA_RESIDENCY=KZ`, `LEGAL_REVIEW_CONFIRMED=true`, `BACKUP_RESTORE_CONFIRMED=true`, `CREDENTIALS_ROTATED=true` только после фактического прохождения соответствующих процедур. Включить `EMAIL_CONFIRMATION_REQUIRED=true`, задать и проверить `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS=true`, `EMAIL_FROM` и парные `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`.
 3. Выполнить deploy неизменяемого Git commit.
 4. Проверить `/health`, `/health/database`, `/health/ready`.
 5. Проверить вход, `/api/v1/session`, dashboard и одну тестовую выгрузку.
@@ -18,6 +18,7 @@ Public API documentation: `/api-docs`. Machine-readable OpenAPI contract: `/open
 Production БД должна поддерживать автоматические резервные копии и point-in-time recovery. Free Render PostgreSQL для production запрещён.
 
 Публичная демонстрация использует `APP_MODE=Demo`: Kaspi connection/sync workers и mutating endpoints отключены, регистрация требует явного подтверждения синтетических данных, а режим отображается в UI и `/health`. Перевод в Pilot/Production выполняется только одновременно с KZ-hosted БД, правовой проверкой и ротацией secrets.
+Если хотя бы один Pilot/Production gate отсутствует, `/health/ready` возвращает 503, регистрация и весь business API блокируются, а background workers не запускаются. Состояние без секретов видно через `/api/v1/runtime`.
 
 Ручной backup:
 
