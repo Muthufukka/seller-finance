@@ -227,7 +227,7 @@ function App() {
   };
   return (
     <div className="app">
-      <Sidebar page={page} open={menu} onClose={() => setMenu(false)} onNav={navigate} isAdmin={!!session.isSaasAdmin} />
+      <Sidebar page={page} open={menu} onClose={() => setMenu(false)} onNav={navigate} role={session.role} isAdmin={!!session.isSaasAdmin} />
       <main>
         <header>
           <button className="icon mobile" onClick={() => setMenu(true)} aria-label={t("header.menu")}>
@@ -451,8 +451,9 @@ function ResetPassword({ email, token }: { email: string; token: string }) {
   );
 }
 
-function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: boolean; onClose: () => void; onNav: (p: Page) => void; isAdmin: boolean }) {
+function Sidebar({ page, open, onClose, onNav, role, isAdmin }: { page: Page; open: boolean; onClose: () => void; onNav: (p: Page) => void; role: string; isAdmin: boolean }) {
   const {t}=useI18n();
+  const canWrite=role!=="Viewer",canManage=role==="Owner"||role==="Admin";
   const nav: [Page, string, React.ReactNode][] = [
     ["dashboard", t("nav.dashboard"), <LayoutDashboard />],
     ["products", t("nav.products"), <Box />],
@@ -482,24 +483,24 @@ function Sidebar({ page, open, onClose, onNav, isAdmin }: { page: Page; open: bo
               {label}
             </button>
           ))}
-          <small>{t("nav.management")}</small>
-          <button className={page === "expenses" ? "active" : ""} onClick={() => onNav("expenses")}>
+          {canWrite&&<small>{t("nav.management")}</small>}
+          {canWrite&&<button className={page === "expenses" ? "active" : ""} onClick={() => onNav("expenses")}>
             <WalletCards />
             {t("nav.expenses")}
-          </button>
-          <button className={page === "fees" ? "active" : ""} onClick={() => onNav("fees")}>
+          </button>}
+          {canManage&&<button className={page === "fees" ? "active" : ""} onClick={() => onNav("fees")}>
             <Settings />
             {t("nav.fees")}
-          </button>
-          <button className={page === "integrations" ? "active" : ""} onClick={() => onNav("integrations")}>
+          </button>}
+          {canManage&&<button className={page === "integrations" ? "active" : ""} onClick={() => onNav("integrations")}>
             <RefreshCw />
             {t("nav.integrations")}
             <span className="dot" />
-          </button>
-          <button className={page === "settings" ? "active" : ""} onClick={() => onNav("settings")}>
+          </button>}
+          {canManage&&<button className={page === "settings" ? "active" : ""} onClick={() => onNav("settings")}>
             <Settings />
             {t("nav.settings")}
-          </button>
+          </button>}
           {isAdmin && (
             <button className={page === "admin" ? "active" : ""} onClick={() => onNav("admin")}>
               <Sparkles />

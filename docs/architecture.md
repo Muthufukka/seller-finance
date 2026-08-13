@@ -51,6 +51,8 @@ Audit trail фиксирует не только изменения бизнес
 
 Cookie-сессия обновляется только через авторизованный `POST /api/v1/auth/refresh`: Identity переиздаёт текущую HttpOnly cookie, а событие фиксируется в audit trail. Отдельных bearer- или refresh-token секретов сервис не создаёт и не хранит.
 
+Права соответствуют назначению роли: Analyst может выполнять рабочие финансовые операции (расходы, импорты, экспорт), но не читает и не изменяет интеграции, Telegram, правила комиссий или список участников. Viewer получает только аналитические и отчётные данные; интерфейс не показывает ему разделы управления, а API дополнительно возвращает `403` при прямом обращении.
+
 Все `/api/v1` ошибки используют `application/problem+json`: endpoint filter нормализует прежние validation/conflict payload, а status-code middleware формирует ProblemDetails для пустых 401/403/404. Ответ содержит HTTP status, безопасный title, request `instance` и `traceId`; успешные контракты не изменяются.
 
 Deployment profile разделяет `Demo`, `Pilot` и `Production`. Demo-seed применяется только по явному `SEED_DEMO_DATA=true`; в Demo отключены Kaspi worker и endpoint подключения/проверки/sync, регистрация требует подтверждения синтетических данных, а UI постоянно показывает предупреждение. Для неизвестного production origin отсутствие `APP_MODE` останавливает startup.
