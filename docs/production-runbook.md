@@ -8,6 +8,7 @@ Public API documentation: `/api-docs`. Machine-readable OpenAPI contract: `/open
 
 1. Убедиться, что CI-тесты и frontend build успешны.
 2. Проверить обязательные Render settings: `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `PUBLIC_BASE_URL` с HTTPS origin и явный `APP_MODE=Pilot|Production`. `SEED_DEMO_DATA` обязан быть выключен. Установить `DATA_RESIDENCY=KZ`, `LEGAL_REVIEW_CONFIRMED=true`, `BACKUP_RESTORE_CONFIRMED=true`, `CREDENTIALS_ROTATED=true` только после фактического прохождения соответствующих процедур. Включить `EMAIL_CONFIRMATION_REQUIRED=true`, задать и проверить `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS=true`, `EMAIL_FROM` и парные `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`.
+   После тестовой регистрации проверить доставку письма и audit event `auth.email.confirmation.sent`. При временном отказе SMTP аккаунт остаётся созданным, UI показывает повторную отправку, а в аудите появляется `auth.email.confirmation.failed` или `auth.email.confirmation.resend.failed`.
 3. Выполнить deploy неизменяемого Git commit.
 4. Проверить `/health`, `/health/database`, `/health/ready`.
 5. Проверить вход, `/api/v1/session`, dashboard и одну тестовую выгрузку.

@@ -47,6 +47,8 @@ SaaS Admin управляет подпиской отдельно от abuse/sec
 
 Audit trail фиксирует не только изменения бизнес-данных, но и завершение сессии, повторную отправку подтверждения email, проверку Kaspi connection и результат тестовой отправки Telegram. В metadata этих событий сохраняются только технические статусы и безопасные error codes — без токенов, email, chat id и данных покупателей.
 
+Регистрация создаёт Identity user, организацию, Owner membership, subscription, notification rules и первичный audit event в одной транзакции PostgreSQL. Отправка письма выполняется после commit: временный отказ SMTP не откатывает созданный аккаунт, API возвращает `emailDelivered=false`, интерфейс предлагает повторную отправку, а успешные и неуспешные попытки фиксируются отдельными audit events.
+
 Все `/api/v1` ошибки используют `application/problem+json`: endpoint filter нормализует прежние validation/conflict payload, а status-code middleware формирует ProblemDetails для пустых 401/403/404. Ответ содержит HTTP status, безопасный title, request `instance` и `traceId`; успешные контракты не изменяются.
 
 Deployment profile разделяет `Demo`, `Pilot` и `Production`. Demo-seed применяется только по явному `SEED_DEMO_DATA=true`; в Demo отключены Kaspi worker и endpoint подключения/проверки/sync, регистрация требует подтверждения синтетических данных, а UI постоянно показывает предупреждение. Для неизвестного production origin отсутствие `APP_MODE` останавливает startup.

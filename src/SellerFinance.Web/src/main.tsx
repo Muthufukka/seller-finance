@@ -308,7 +308,8 @@ function AuthScreen({ onAuthenticated,runtime }: { onAuthenticated: (session: Se
     [forgot, setForgot] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [success, setSuccess] = useState("");
+    [success, setSuccess] = useState(""),
+    [pendingConfirmationEmail,setPendingConfirmationEmail]=useState("");
   if (params.get("resetToken") && params.get("resetEmail")) return <ResetPassword email={params.get("resetEmail")!} token={params.get("resetToken")!} />;
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -337,7 +338,8 @@ function AuthScreen({ onAuthenticated,runtime }: { onAuthenticated: (session: Se
         return;
       }
       if (data?.emailConfirmationRequired) {
-        setSuccess(t("auth.confirm.success"));
+        setPendingConfirmationEmail(String(body.email||""));
+        setSuccess(data.emailDelivered===false?t("auth.confirm.deliveryFailed"):t("auth.confirm.success"));
         return;
       }
       const sessionResponse = await fetch("/api/v1/session");
@@ -349,6 +351,7 @@ function AuthScreen({ onAuthenticated,runtime }: { onAuthenticated: (session: Se
       setBusy(false);
     }
   };
+  const resendConfirmation=async()=>{if(!pendingConfirmationEmail)return;setBusy(true);try{await fetch("/api/v1/auth/resend-confirmation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:pendingConfirmationEmail})});setSuccess(t("auth.confirm.resent"));}finally{setBusy(false)}};
   return (
     <div className="auth-page">
       <section className="auth-panel">
@@ -365,7 +368,7 @@ function AuthScreen({ onAuthenticated,runtime }: { onAuthenticated: (session: Se
         <p>{forgot ? t("auth.forgot.lead") : register ? t("auth.register.lead") : t("auth.login.lead")}</p>
         {runtime.isDemo&&<div className="auth-demo-warning"><b>{t("demo.auth.title")}</b><span>{t("demo.auth.body")}</span></div>}
         {success ? (
-          <div className="auth-success">{success}</div>
+          <><div className="auth-success">{success}</div>{pendingConfirmationEmail&&<button className="auth-switch" disabled={busy} onClick={resendConfirmation}>{busy?t("common.wait"):t("auth.confirm.resend")}</button>}</>
         ) : (
           <form onSubmit={submit}>
             {register && (

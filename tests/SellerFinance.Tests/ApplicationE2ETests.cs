@@ -127,6 +127,13 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Configured_Smtp_Failure_Does_Not_Orphan_The_Registration_Flow()
+    {
+        await using var isolated=new FailingSmtpApplicationFactory();using var client=isolated.CreateClient(new(){AllowAutoRedirect=false});var email=$"smtp-failure-{Guid.NewGuid():N}@example.test";var registration=await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="SMTP Failure",organizationName="SMTP Failure Org"});Assert.Equal(HttpStatusCode.OK,registration.StatusCode);var payload=await registration.Content.ReadFromJsonAsync<JsonElement>();Assert.True(payload.GetProperty("emailConfirmationRequired").GetBoolean());Assert.False(payload.GetProperty("emailDelivered").GetBoolean());Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/resend-confirmation",new{email})).StatusCode);
+        await using var scope=isolated.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var user=await db.Users.SingleAsync(x=>x.Email==email);Assert.False(user.EmailConfirmed);Assert.Single(await db.OrganizationUsers.Where(x=>x.UserId==user.Id).ToArrayAsync());Assert.True(await db.AuditLogs.AnyAsync(x=>x.UserId==user.Id&&x.Action=="auth.email.confirmation.failed"));Assert.True(await db.AuditLogs.AnyAsync(x=>x.UserId==user.Id&&x.Action=="auth.email.confirmation.resend.failed"));
+    }
+
+    [Fact]
     public async Task Authenticated_User_Can_Create_And_Switch_To_An_Isolated_Organization()
     {
         using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"multi-{Guid.NewGuid():N}@example.test";Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Multi",organizationName="First Org"})).StatusCode);var first=await client.GetFromJsonAsync<JsonElement>("/api/v1/session");var firstId=first.GetProperty("organizationId").GetString()!;
@@ -160,6 +167,15 @@ public sealed class MissingSmtpApplicationFactory : WebApplicationFactory<Progra
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         var databaseName=$"seller-finance-no-smtp-{Guid.NewGuid():N}";builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","true");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"EMAIL_CONFIRMATION_REQUIRED","true"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
+    }
+}
+
+public sealed class FailingSmtpApplicationFactory:WebApplicationFactory<Program>
+{
+    private readonly string databaseName=$"seller-finance-smtp-failure-{Guid.NewGuid():N}";
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");builder.UseSetting("TEST_USE_INMEMORY","true");builder.UseSetting("TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32]));builder.UseSetting("EMAIL_CONFIRMATION_REQUIRED","true");builder.ConfigureAppConfiguration((_,config)=>config.AddInMemoryCollection(new Dictionary<string,string?>{{"TEST_USE_INMEMORY","true"},{"TOKEN_ENCRYPTION_KEY",Convert.ToBase64String(new byte[32])},{"EMAIL_CONFIRMATION_REQUIRED","true"},{"EMAIL_SMTP_HOST","127.0.0.1"},{"EMAIL_SMTP_PORT","1"},{"EMAIL_SMTP_TLS","false"},{"EMAIL_SMTP_TIMEOUT_SECONDS","1"},{"EMAIL_FROM","seller@example.test"},{"PUBLIC_BASE_URL","https://seller.example"}}));builder.ConfigureServices(services=>{services.RemoveAll<DbContextOptions<SellerFinanceDbContext>>();services.RemoveAll<Microsoft.EntityFrameworkCore.Infrastructure.IDbContextOptionsConfiguration<SellerFinanceDbContext>>();services.RemoveAll<SellerFinanceDbContext>();services.AddDbContext<SellerFinanceDbContext>(options=>options.UseInMemoryDatabase(databaseName));});
     }
 }
 
