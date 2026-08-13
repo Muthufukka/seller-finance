@@ -50,7 +50,12 @@ builder.Services.AddRateLimiter(options=>
     options.RejectionStatusCode=429;
 });
 builder.Services.AddOpenApi();
-builder.Services.AddProblemDetails();
+builder.Services.AddProblemDetails(options=>options.CustomizeProblemDetails=context=>
+{
+    context.ProblemDetails.Instance??=context.HttpContext.Request.Path;
+    context.ProblemDetails.Type??=$"https://httpstatuses.io/{context.ProblemDetails.Status??500}";
+    context.ProblemDetails.Extensions.TryAdd("traceId",context.HttpContext.TraceIdentifier);
+});
 builder.Services.AddSingleton<EmailDelivery>();
 builder.Services.AddSingleton<ExternalUrls>();
 builder.Services.AddHttpsRedirection(options=>{options.RedirectStatusCode=StatusCodes.Status308PermanentRedirect;options.HttpsPort=443;});
@@ -65,6 +70,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 app.UseForwardedHeaders();
 if(!app.Environment.IsDevelopment()&&!app.Environment.IsEnvironment("Testing")){app.UseHsts();app.UseHttpsRedirection();}
 app.UseExceptionHandler();
+app.UseStatusCodePages();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.Use(async(context,next)=>{context.Response.Headers["X-Content-Type-Options"]="nosniff";context.Response.Headers["Referrer-Policy"]="strict-origin-when-cross-origin";context.Response.Headers["Content-Security-Policy"]="default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'";await next();});
@@ -85,6 +91,7 @@ app.MapGet("/api/v1/exports/download/{token}",async(string token,SellerFinanceDb
 app.MapPost("/api/v1/telegram/webhook",async(HttpContext context,IConfiguration config,SellerFinanceDbContext db,TelegramClient telegram,CancellationToken ct)=>{var secret=context.Request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString();if(!TelegramWebhook.ValidSecret(secret,config))return Results.NotFound();var update=await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body,cancellationToken:ct);await TelegramWebhook.ProcessAsync(update,db,telegram,ct);return Results.Ok();}).RequireRateLimiting("sensitive");
 
 var auth = app.MapGroup("/api/v1/auth");
+auth.AddEndpointFilter(async(invocation,next)=>ApiProblemDetails.Normalize(await next(invocation),invocation.HttpContext));
 auth.MapPost("/register", async (HttpContext context,RegisterRequest request, UserManager<AppUser> users, SignInManager<AppUser> signIn, SellerFinanceDbContext db,EmailDelivery email,IConfiguration config,ExternalUrls urls) =>
 {
     if (String.IsNullOrWhiteSpace(request.OrganizationName) || request.OrganizationName.Trim().Length < 2)
@@ -134,6 +141,7 @@ auth.MapPost("/reset-password", async (ResetPasswordRequest request, UserManager
 }).RequireRateLimiting("auth");
 
 var api = app.MapGroup("/api/v1").RequireAuthorization();
+api.AddEndpointFilter(async(invocation,next)=>ApiProblemDetails.Normalize(await next(invocation),invocation.HttpContext));
 api.AddEndpointFilter(async (invocation, next) =>
 {
     var context=invocation.HttpContext;

@@ -47,5 +47,7 @@ SaaS Admin управляет подпиской отдельно от abuse/sec
 
 Audit trail фиксирует не только изменения бизнес-данных, но и завершение сессии, повторную отправку подтверждения email, проверку Kaspi connection и результат тестовой отправки Telegram. В metadata этих событий сохраняются только технические статусы и безопасные error codes — без токенов, email, chat id и данных покупателей.
 
+Все `/api/v1` ошибки используют `application/problem+json`: endpoint filter нормализует прежние validation/conflict payload, а status-code middleware формирует ProblemDetails для пустых 401/403/404. Ответ содержит HTTP status, безопасный title, request `instance` и `traceId`; успешные контракты не изменяются.
+
 Kaspi, export и Telegram workers используют атомарный conditional claim в PostgreSQL. Только один экземпляр может перевести конкретную запись в `Running`/`Sending`; задания с истёкшим lease восстанавливаются после падения процесса. Частичный уникальный индекс допускает не более одного активного sync job на Kaspi connection, а конкурентная постановка возвращает безопасный conflict вместо дубля.
 Kaspi worker дополнительно сверяет `OrganizationId` задания и подключения перед расшифровкой токена; повреждённая или cross-tenant связь переводится в `RequiresAttention` с безопасным кодом и не запускает обращение к marketplace.

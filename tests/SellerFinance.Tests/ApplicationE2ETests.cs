@@ -84,7 +84,13 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/database")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/health/ready")).StatusCode);
         var docs=await client.GetStringAsync("/api-docs");Assert.Contains("/openapi/v1.json",docs);var openApi=await client.GetFromJsonAsync<JsonElement>("/openapi/v1.json");Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/products",out _));Assert.True(openApi.GetProperty("paths").TryGetProperty("/api/v1/exports",out _));
-        Assert.Equal(HttpStatusCode.Unauthorized,(await client.GetAsync("/api/v1/session")).StatusCode);
+        var unauthorized=await client.GetAsync("/api/v1/session");Assert.Equal(HttpStatusCode.Unauthorized,unauthorized.StatusCode);Assert.Equal("application/problem+json",unauthorized.Content.Headers.ContentType?.MediaType);var unauthorizedProblem=await unauthorized.Content.ReadFromJsonAsync<JsonElement>();Assert.Equal(401,unauthorizedProblem.GetProperty("status").GetInt32());Assert.Equal("/api/v1/session",unauthorizedProblem.GetProperty("instance").GetString());Assert.True(unauthorizedProblem.TryGetProperty("traceId",out _));
+    }
+
+    [Fact]
+    public async Task Api_Validation_Errors_Use_ProblemDetails_Contract()
+    {
+        using var client=factory.CreateClient(new(){AllowAutoRedirect=false});var response=await client.PostAsJsonAsync("/api/v1/auth/register",new{email=$"problem-{Guid.NewGuid():N}@example.test",password="PilotTest123",displayName="Problem",organizationName="X"});Assert.Equal(HttpStatusCode.BadRequest,response.StatusCode);Assert.Equal("application/problem+json",response.Content.Headers.ContentType?.MediaType);var problem=await response.Content.ReadFromJsonAsync<JsonElement>();Assert.Equal(400,problem.GetProperty("status").GetInt32());Assert.Equal("Укажите название организации",problem.GetProperty("title").GetString());Assert.Equal("/api/v1/auth/register",problem.GetProperty("instance").GetString());Assert.True(problem.TryGetProperty("traceId",out _));
     }
 
     [Fact]
