@@ -1,14 +1,37 @@
 services:
-  api:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: seller_finance
+      POSTGRES_USER: seller_finance
+      POSTGRES_PASSWORD: seller_finance_dev_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seller_finance -d seller_finance"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - seller-finance-postgres:/var/lib/postgresql
+
+  app:
     build:
       context: .
       dockerfile: src/SellerFinance.Api/Dockerfile
-    ports:
-      - "5068:8080"
-  web:
-    build:
-      context: src/SellerFinance.Web
-    ports:
-      - "5173:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:10000
+      DATABASE_URL: postgresql://seller_finance:seller_finance_dev_only@postgres:5432/seller_finance
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      PUBLIC_BASE_URL: http://localhost:5068
+      APP_MODE: Demo
+      SEED_DEMO_DATA: "true"
     depends_on:
-      - api
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5068:10000"
+
+volumes:
+  seller-finance-postgres:

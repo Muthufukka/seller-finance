@@ -32,6 +32,14 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
+Полный локальный smoke-контур (API, собранный frontend и PostgreSQL 18):
+
+```powershell
+docker compose up --build
+```
+
+После запуска открыть `http://localhost:5068/health/database`. PostgreSQL доступен только с `127.0.0.1:5432`; credentials в `docker-compose.yml` предназначены исключительно для локальной разработки.
+
 Миграции применяются приложением при старте. Создание новой миграции:
 
 ```powershell
