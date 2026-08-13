@@ -424,6 +424,8 @@ public sealed class SyncJobEntity
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public int ProcessedOrders { get; set; }
+    public int ChangedOrders { get; set; }
     public int ImportedOrders { get; set; }
     public string? ErrorCode { get; set; }
 }

@@ -123,8 +123,8 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
         catch(CryptographicException) { result=new(false,0,"TOKEN_DECRYPTION_FAILED",[]); }
         if(result.Success)
         {
-            await KaspiOrderImporter.UpsertAsync(db,job.OrganizationId,job.MarketplaceConnectionId,result.Orders,ct);
-            job.Status=SyncJobStatus.Succeeded; job.CompletedAt=DateTimeOffset.UtcNow; job.ImportedOrders=result.Orders.Count; connection.Status=MarketplaceConnectionStatus.Active; connection.LastSuccessfulSyncAt=DateTimeOffset.UtcNow; connection.LastErrorCode=null;
+            var import=await KaspiOrderImporter.UpsertAsync(db,job.OrganizationId,job.MarketplaceConnectionId,result.Orders,ct);
+            job.Status=SyncJobStatus.Succeeded; job.CompletedAt=DateTimeOffset.UtcNow; job.ProcessedOrders=import.ProcessedOrders; job.ChangedOrders=import.ChangedOrders; job.ImportedOrders=import.ProcessedOrders; connection.Status=MarketplaceConnectionStatus.Active; connection.LastSuccessfulSyncAt=DateTimeOffset.UtcNow; connection.LastErrorCode=null;
         }
         else
         {
@@ -157,24 +157,31 @@ public sealed class KaspiSyncWorker(IServiceScopeFactory scopes,ILogger<KaspiSyn
 
 public static class KaspiOrderImporter
 {
-    public static async Task UpsertAsync(SellerFinanceDbContext db,string organizationId,Guid connectionId,IReadOnlyList<KaspiOrderDto> sources,CancellationToken ct=default)
+    public static async Task<KaspiUpsertResult> UpsertAsync(SellerFinanceDbContext db,string organizationId,Guid connectionId,IReadOnlyList<KaspiOrderDto> sources,CancellationToken ct=default)
     {
+        var changedOrders=0;
         foreach(var source in sources)
         {
             var order=await db.Orders.Include(x=>x.Lines).SingleOrDefaultAsync(x=>x.OrganizationId==organizationId&&x.MarketplaceConnectionId==connectionId&&x.ExternalId==source.Id,ct);var isNew=order is null;
             if(order is null){order=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,MarketplaceConnectionId=connectionId,ExternalId=source.Id};db.Orders.Add(order);}var mappedStatus=MapStatus(source.Status);if(isNew||order.Status!=mappedStatus)db.OrderStatusHistory.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,OrderId=order.Id,Status=mappedStatus,ExternalStatus=source.Status.Trim().ToUpperInvariant(),ChangedAt=DateTimeOffset.UtcNow});
+            var changed=isNew||order.Code!=source.Code||order.TotalPrice!=source.TotalPrice||order.PaymentMode!=source.PaymentMode||order.SellerDeliveryCost!=source.SellerDeliveryCost||order.Status!=mappedStatus||order.Date!=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime)||order.CompletionDate!=(source.CompletedAt.HasValue?DateOnly.FromDateTime(source.CompletedAt.Value.UtcDateTime):null);
             order.Code=source.Code;order.TotalPrice=source.TotalPrice;order.PaymentMode=source.PaymentMode;order.SellerDeliveryCost=source.SellerDeliveryCost;
             order.Date=DateOnly.FromDateTime(source.CreatedAt.UtcDateTime);order.CompletionDate=source.CompletedAt.HasValue?DateOnly.FromDateTime(source.CompletedAt.Value.UtcDateTime):null;order.Status=mappedStatus;order.CalculationDateFallback=order.Status==OrderStatus.Completed&&order.CompletionDate is null;
-            if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId));}
+            if(source.Lines.Count>0){var sourceIds=source.Lines.Select(x=>x.EntryId).ToHashSet();if(order.Lines.RemoveAll(x=>x.ExternalId is null&&x.ProductId=="kaspi-unmapped"||x.ExternalId is not null&&!sourceIds.Contains(x.ExternalId))>0)changed=true;}
             var hasCompleteItemDelivery=source.Lines.Count>0&&source.Lines.All(x=>x.ItemDeliveryCost.HasValue);var allocatedDelivery=hasCompleteItemDelivery?null:FinanceCalculator.AllocateByRevenue(source.SellerDeliveryCost,source.Lines.Select(x=>x.Revenue).ToArray());
             for(var index=0;index<source.Lines.Count;index++)
             {
                 var item=source.Lines[index];var product=await db.Products.SingleOrDefaultAsync(x=>x.OrganizationId==organizationId&&x.Sku==item.ProductCode,ct);
                 if(product is null){product=new(){Id=Guid.NewGuid().ToString("N"),OrganizationId=organizationId,Sku=item.ProductCode,Name=item.Name,Category=item.Category,ExternalProductId=item.ExternalProductId};db.Products.Add(product);}else{product.Name=item.Name;product.Category=item.Category;product.ExternalProductId=item.ExternalProductId??product.ExternalProductId;}
-                var line=order.Lines.SingleOrDefault(x=>x.ExternalId==item.EntryId);if(line is null){line=new(){Id=Guid.NewGuid(),OrderId=order.Id,ExternalId=item.EntryId};order.Lines.Add(line);}
+                var line=order.Lines.SingleOrDefault(x=>x.ExternalId==item.EntryId);if(line is null){line=new(){Id=Guid.NewGuid(),OrderId=order.Id,ExternalId=item.EntryId};order.Lines.Add(line);changed=true;}
+                else if(line.ProductId!=product.Id||line.Quantity!=item.Quantity||line.Revenue!=item.Revenue||line.BasePrice!=item.BasePrice||line.ItemDeliveryCost!=item.ItemDeliveryCost)changed=true;
                 line.ProductId=product.Id;line.Quantity=item.Quantity;line.Revenue=item.Revenue;line.BasePrice=item.BasePrice;line.ItemDeliveryCost=item.ItemDeliveryCost;line.Delivery=hasCompleteItemDelivery?item.ItemDeliveryCost!.Value:allocatedDelivery![index];
             }
+            if(changed)changedOrders++;
         }
+        return new(sources.Count,changedOrders);
     }
     private static OrderStatus MapStatus(string value)=>value.Trim().ToUpperInvariant() switch{"COMPLETED" or "DELIVERED"=>OrderStatus.Completed,"RETURNED" or "KASPI_DELIVERY_RETURN_REQUESTED"=>OrderStatus.Returned,"CANCELLED" or "CANCELED" or "CANCELLING"=>OrderStatus.Cancelled,_=>OrderStatus.Pending};
 }
+
+public sealed record KaspiUpsertResult(int ProcessedOrders,int ChangedOrders);

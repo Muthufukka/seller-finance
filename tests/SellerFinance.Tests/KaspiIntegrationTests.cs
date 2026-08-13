@@ -81,8 +81,9 @@ public sealed class KaspiIntegrationTests
     public async Task Importer_Upserts_Per_Connection_And_Allows_Same_External_Order_In_Two_Stores()
     {
         await using var db=new SellerFinanceDbContext(new DbContextOptionsBuilder<SellerFinanceDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);var first=Guid.NewGuid();var second=Guid.NewGuid();var source=new KaspiOrderDto("external-1","100",1000,"COMPLETED",DateTimeOffset.UtcNow,[new("entry-1","SKU","Product",null,1,1000,0)]);
-        await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();await KaspiOrderImporter.UpsertAsync(db,"org",second,[source]);await db.SaveChangesAsync();
+        var firstImport=await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();var repeatImport=await KaspiOrderImporter.UpsertAsync(db,"org",first,[source]);await db.SaveChangesAsync();var secondImport=await KaspiOrderImporter.UpsertAsync(db,"org",second,[source]);await db.SaveChangesAsync();
         Assert.Equal(2,await db.Orders.CountAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==first).ToArrayAsync());Assert.Single(await db.Orders.Where(x=>x.MarketplaceConnectionId==second).ToArrayAsync());Assert.Equal(2,await db.OrderStatusHistory.CountAsync());
+        Assert.Equal(new KaspiUpsertResult(1,1),firstImport);Assert.Equal(new KaspiUpsertResult(1,0),repeatImport);Assert.Equal(new KaspiUpsertResult(1,1),secondImport);
     }
 
     [Fact]
