@@ -26,11 +26,12 @@
 - Render указывает дату удаления Free-базы: 11 сентября 2026. Это исключает её использование как долгоживущего хранилища Pilot/Production.
 - Web Service использует отдельный секрет `DATABASE_URL`; при ротации credential его необходимо обновлять согласованно с новым internal URL и проверять `/health/database` после deploy.
 - Внешние inbound rules базы содержат `0.0.0.0/0`. До появления обоснованного внешнего потребителя правило следует сузить или удалить вместе с миграцией на целевую инфраструктуру.
+- 13 августа 2026 выполнена ротация credential: создан новый default credential, `DATABASE_URL` Web Service переключён на его internal URL, deploy успешно завершён, а старый credential удалён. После удаления `/health/database` вернул `healthy`.
 
 - [ ] Перенести PostgreSQL с Render Free в долгоживущую инфраструктуру, физически размещённую в Казахстане; подтвердить `DATA_RESIDENCY=KZ`.
 - [ ] Провести профильную юридическую проверку обработки данных; только после неё задать `LEGAL_REVIEW_CONFIRMED=true`.
 - [ ] Настроить ежедневные backup/PITR и выполнить restore drill в отдельную БД; только после подтверждения задать `BACKUP_RESTORE_CONFIRMED=true`.
-- [ ] Ротировать PostgreSQL password, который был опубликован в переписке, и любые временные secrets; затем задать `CREDENTIALS_ROTATED=true`.
+- [x] Ротировать PostgreSQL password, который был опубликован в переписке, и любые временные secrets. Выполнено 13 августа 2026; старый credential удалён, новый проверен через database health. `CREDENTIALS_ROTATED=true` следует установить только в целевой Pilot/Production среде после миграции в Казахстан.
 - [ ] Настроить production SMTP с TLS, провести доставку confirmation/reset email и включить `EMAIL_CONFIRMATION_REQUIRED=true`.
 - [ ] Получить отдельный реальный Kaspi token от продавца через кабинет Kaspi, сохранить его только через защищённую форму/Pilot secrets, сверить adapter с актуальной официальной документацией и обезличенными fixtures.
 - [ ] Провести pilot с 5–10 продавцами: сопоставить результаты с их Excel/P&L, проверить возвраты, комиссии, delivery и Coverage, зафиксировать расхождения.
