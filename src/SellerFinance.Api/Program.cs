@@ -134,6 +134,10 @@ auth.MapPost("/login", async (LoginRequest request, UserManager<AppUser> users, 
     return Results.Ok(new { status="authenticated" });
 }).RequireRateLimiting("auth");
 auth.MapPost("/logout", async (HttpContext context,SignInManager<AppUser> signIn,SellerFinanceDbContext db) => { var userId=context.User.FindFirstValue(ClaimTypes.NameIdentifier);var organizationId=context.User.FindFirstValue(TenantSecurity.ActiveOrganizationClaim);db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=userId,Action="auth.logout",EntityType="User",EntityId=userId});await db.SaveChangesAsync();await signIn.SignOutAsync();return Results.NoContent(); }).RequireAuthorization();
+auth.MapPost("/refresh",async(HttpContext context,UserManager<AppUser> users,SignInManager<AppUser> signIn,SellerFinanceDbContext db)=>
+{
+    var user=await users.GetUserAsync(context.User);if(user is null)return Results.Unauthorized();await signIn.RefreshSignInAsync(user);var organizationId=context.User.FindFirstValue(TenantSecurity.ActiveOrganizationClaim);db.AuditLogs.Add(new(){Id=Guid.NewGuid(),OrganizationId=organizationId,UserId=user.Id,Action="auth.session.refreshed",EntityType="User",EntityId=user.Id});await db.SaveChangesAsync(context.RequestAborted);return Results.NoContent();
+}).RequireAuthorization().RequireRateLimiting("auth");
 auth.MapPost("/forgot-password", async (HttpContext context,ForgotPasswordRequest request, UserManager<AppUser> users,EmailDelivery email,SellerFinanceDbContext db,ExternalUrls urls) =>
 {
     var user = await users.FindByEmailAsync(request.Email.Trim());

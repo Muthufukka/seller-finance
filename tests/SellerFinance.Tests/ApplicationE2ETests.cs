@@ -142,6 +142,12 @@ public sealed class ApplicationE2ETests : IClassFixture<SellerFinanceApplication
     }
 
     [Fact]
+    public async Task Authenticated_User_Can_Refresh_The_Cookie_Session()
+    {
+        using var client=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var email=$"refresh-{Guid.NewGuid():N}@example.test";Assert.Equal(HttpStatusCode.OK,(await client.PostAsJsonAsync("/api/v1/auth/register",new{email,password="PilotTest123",displayName="Refresh",organizationName="Refresh Org"})).StatusCode);Assert.Equal(HttpStatusCode.NoContent,(await client.PostAsync("/api/v1/auth/refresh",null)).StatusCode);Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/api/v1/session")).StatusCode);await using var scope=factory.Services.CreateAsyncScope();var db=scope.ServiceProvider.GetRequiredService<SellerFinanceDbContext>();var user=await db.Users.SingleAsync(x=>x.Email==email);Assert.True(await db.AuditLogs.AnyAsync(x=>x.UserId==user.Id&&x.Action=="auth.session.refreshed"));
+    }
+
+    [Fact]
     public async Task Owner_Manages_Members_Invitations_And_Role_Boundaries()
     {
         using var ownerClient=factory.CreateClient(new(){AllowAutoRedirect=false,HandleCookies=true});var ownerEmail=$"owner-{Guid.NewGuid():N}@example.test";const string password="PilotTest123";
